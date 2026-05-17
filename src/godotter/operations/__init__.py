@@ -12,6 +12,7 @@ from godotter.operations.runtime import (
     format_doctor_report,
     format_runtime_result,
     format_uid_fix_result,
+    resolve_runtime_target,
 )
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     'format_runtime_result',
     'format_uid_fix_result',
     'normalize_provider_name',
+    'resolve_runtime_target',
     'set_default_provider',
     'set_model_for_provider',
     'set_provider_key',

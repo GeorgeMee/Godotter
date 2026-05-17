@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     memory_path: Path = Field(default=Path('.godotter/memory.md'), alias='GODOTTER_MEMORY_PATH')
     default_mode: str = Field(default='plan', alias='GODOTTER_DEFAULT_MODE')
     default_brain: str = Field(default='stub', alias='GODOTTER_DEFAULT_BRAIN')
+    default_project_name: str | None = Field(default=None, alias='GODOTTER_DEFAULT_PROJECT')
+    project_registry_path: Path = Field(default=Path('config/projects.toml'), alias='GODOTTER_PROJECT_REGISTRY_PATH')
 
     deepseek_api_key: str | None = Field(default=None, alias='DEEPSEEK_API_KEY')
     deepseek_base_url: str = Field(default='https://api.deepseek.com', alias='DEEPSEEK_BASE_URL')
@@ -46,6 +48,12 @@ class Settings(BaseSettings):
         if self.memory_path.is_absolute():
             return self.memory_path
         return self.workspace_root / self.memory_path
+
+    @property
+    def resolved_project_registry_path(self) -> Path:
+        if self.project_registry_path.is_absolute():
+            return self.project_registry_path
+        return Path.cwd() / self.project_registry_path
 
 
 @lru_cache(maxsize=1)

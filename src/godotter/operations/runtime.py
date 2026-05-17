@@ -2,13 +2,22 @@
 
 import typer
 
+from godotter.project_registry import ProjectRegistryError, resolve_runtime_target as resolve_runtime_target_from_registry
 from godotter.runtime import GodotRunner
 
 
-def build_runner(settings) -> GodotRunner:
-    if not settings.godot_path:
+def resolve_runtime_target(settings, project: str | None = None):
+    try:
+        return resolve_runtime_target_from_registry(settings, project=project)
+    except ProjectRegistryError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def build_runner(settings, project: str | None = None) -> GodotRunner:
+    target = resolve_runtime_target(settings, project=project)
+    if not target.godot_path:
         raise typer.BadParameter('GODOT_PATH is not configured')
-    return GodotRunner(settings.godot_path, settings.workspace_root)
+    return GodotRunner(target.godot_path, target.workspace_root)
 
 
 def format_runtime_result(command: str, target: str, result) -> str:
