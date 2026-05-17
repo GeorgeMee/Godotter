@@ -1,4 +1,5 @@
 ﻿from godotter.tools.files import ListFiles, ReadFile, SearchCode
+from godotter.tools.git import GitBranchTool, GitDiffTool, GitLogTool, GitStatusTool
 from godotter.tools.memory import SaveMemory
 from godotter.tools.patch import ApplyPatch, GeneratePatch
 from godotter.tools.runtime import (
@@ -19,6 +20,10 @@ def build_default_tools() -> list[object]:
         ReadFile(),
         ListFiles(),
         SearchCode(),
+        GitStatusTool(),
+        GitDiffTool(),
+        GitLogTool(),
+        GitBranchTool(),
         SaveMemory(),
         GeneratePatch(),
         ApplyPatch(),

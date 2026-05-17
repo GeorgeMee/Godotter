@@ -1,5 +1,6 @@
 ﻿from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 
 from godotter.agent import Agent
 from godotter.config import Settings
@@ -57,6 +58,12 @@ def build_agent(tmp_path, mode: str = 'plan', godot_path: str | None = None) -> 
     memory = Memory(settings.resolved_memory_path)
     registry = ToolRegistry(build_default_tools())
     return Agent(StubBrain(), settings=settings, registry=registry, memory=memory, mode=mode)
+
+
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(['git', 'init'], cwd=path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'config', 'user.name', 'Godotter Test'], cwd=path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'config', 'user.email', 'godotter@example.com'], cwd=path, check=True, capture_output=True, text=True)
 
 
 def test_plain_chat_echoes(tmp_path):
@@ -265,3 +272,36 @@ def test_uid_fix_tool_flow_act_mode(tmp_path):
     assert 'change file=scenes/main.tscn uid=uid://player123 old_path=res://old/player.gd new_path=res://scripts/player.gd' in result
     updated = scene_path.read_text(encoding='utf-8')
     assert 'path="res://scripts/player.gd"' in updated
+
+
+def test_git_tools_report_missing_repo(tmp_path):
+    agent = build_agent(tmp_path)
+    result = agent.handle_input('tool git_status {}')
+    assert 'not a git repository' in result.lower()
+
+
+def test_git_tools_report_repo_state(tmp_path):
+    _init_git_repo(tmp_path)
+    tracked = tmp_path / 'tracked.txt'
+    tracked.write_text('alpha\n', encoding='utf-8')
+    subprocess.run(['git', 'add', 'tracked.txt'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'commit', '-m', 'initial commit'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    tracked.write_text('beta\n', encoding='utf-8')
+    untracked = tmp_path / 'notes.txt'
+    untracked.write_text('todo\n', encoding='utf-8')
+
+    agent = build_agent(tmp_path)
+
+    status_result = agent.handle_input('tool git_status {}')
+    assert 'M tracked.txt' in status_result or 'M  tracked.txt' in status_result
+    assert '?? notes.txt' in status_result
+
+    diff_result = agent.handle_input('tool git_diff path=tracked.txt')
+    assert '--- a/tracked.txt' in diff_result
+    assert '+++ b/tracked.txt' in diff_result
+
+    log_result = agent.handle_input('tool git_log limit=1')
+    assert 'initial commit' in log_result
+
+    branch_result = agent.handle_input('tool git_branch {}')
+    assert '*' in branch_result
