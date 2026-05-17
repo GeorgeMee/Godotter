@@ -1,0 +1,47 @@
+[project]
+name = "godotter"
+version = "0.1.0"
+description = "Workflow-first AI-assisted development runtime for Godot projects."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.16.0",
+    "rich>=14.0.0",
+    "structlog>=25.0.0",
+    "pydantic>=2.11.0",
+    "pydantic-settings>=2.9.0",
+    "python-dotenv>=1.0.1",
+    "requests>=2.32.0",
+    "GitPython>=3.1.0",
+    "unidiff>=0.7.5",
+]
+
+[project.scripts]
+godotter = "godotter.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.11.0",
+    "mypy>=1.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/godotter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+check_untyped_defs = true
+strict_optional = true
