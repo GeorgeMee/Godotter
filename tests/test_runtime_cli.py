@@ -67,7 +67,7 @@ def test_runtime_lint_command(monkeypatch, tmp_path):
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.GodotRunner', FakeGodotRunner)
+    monkeypatch.setattr('godotter.interfaces.cli.build_runner', lambda settings: FakeGodotRunner(settings.godot_path, settings.workspace_root))
     result = runner.invoke(app, ['runtime', 'lint', 'scripts/player.gd', '--timeout', '7'])
     assert result.exit_code == 0
     assert 'command=script_lint' in result.stdout
@@ -79,7 +79,7 @@ def test_runtime_run_command(monkeypatch, tmp_path):
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.GodotRunner', FakeGodotRunner)
+    monkeypatch.setattr('godotter.interfaces.cli.build_runner', lambda settings: FakeGodotRunner(settings.godot_path, settings.workspace_root))
     result = runner.invoke(app, ['runtime', 'run', '--scene', 'res://scenes/main.tscn', '--timeout', '11'])
     assert result.exit_code == 0
     assert 'command=headless_run' in result.stdout
