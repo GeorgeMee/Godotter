@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import difflib
@@ -8,6 +8,7 @@ from typing import Any
 from unidiff import PatchSet
 
 from godotter.tools.base import Tool, ToolContext
+from godotter.utils.textio import read_text_utf8, write_text_utf8
 
 
 @dataclass(slots=True)
@@ -34,7 +35,7 @@ class GeneratePatch(Tool):
 
     def execute(self, context: ToolContext, **kwargs: Any) -> str:
         path = context.resolve_path(str(kwargs['path']))
-        original = path.read_text(encoding='utf-8') if path.exists() else ''
+        original = read_text_utf8(path) if path.exists() else ''
 
         if 'new_content' in kwargs and kwargs['new_content'] is not None:
             updated = str(kwargs['new_content'])
@@ -89,7 +90,7 @@ class ApplyPatch(Tool):
                     target.path.unlink()
             else:
                 target.path.parent.mkdir(parents=True, exist_ok=True)
-                target.path.write_text(result, encoding='utf-8')
+                write_text_utf8(target.path, result)
             applied.append(str(relative))
         return 'Applied patch to: ' + ', '.join(applied)
 
@@ -98,7 +99,7 @@ class ApplyPatch(Tool):
             return _normalize_patch_text(str(kwargs['patch']))
         if kwargs.get('patch_path'):
             patch_path = context.resolve_path(str(kwargs['patch_path']))
-            return patch_path.read_text(encoding='utf-8')
+            return read_text_utf8(patch_path)
         return ''
 
     def _load_target(self, context: ToolContext, patched_file: Any) -> PatchTarget:
@@ -107,11 +108,11 @@ class ApplyPatch(Tool):
             return PatchTarget(path=path, original_lines=[], is_new=True)
         if patched_file.is_removed_file:
             path = context.resolve_path(_normalize_diff_path(patched_file.source_file))
-            original = path.read_text(encoding='utf-8').splitlines(True)
+            original = read_text_utf8(path).splitlines(True)
             return PatchTarget(path=path, original_lines=original, is_delete=True)
 
         path = context.resolve_path(_normalize_diff_path(patched_file.source_file))
-        original = path.read_text(encoding='utf-8').splitlines(True)
+        original = read_text_utf8(path).splitlines(True)
         return PatchTarget(path=path, original_lines=original)
 
     def _apply_file_patch(self, patched_file: Any, target: PatchTarget) -> str:
@@ -156,3 +157,4 @@ def _normalize_patch_text(patch_text: str) -> str:
     if '\\n' in patch_text and '\n' not in patch_text:
         return patch_text.encode('utf-8').decode('unicode_escape')
     return patch_text
+

@@ -1,6 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
+
+from godotter.utils.textio import read_text_utf8, write_text_utf8
 
 
 class EnvFile:
@@ -25,9 +27,10 @@ class EnvFile:
         if not replaced:
             updated.append(rendered)
 
-        self.path.write_text('\n'.join(updated).rstrip() + '\n', encoding='utf-8')
+        write_text_utf8(self.path, '\n'.join(updated).rstrip() + '\n')
 
     def _read_lines(self) -> list[str]:
         if not self.path.exists():
             return []
-        return self.path.read_text(encoding='utf-8').splitlines()
+        return read_text_utf8(self.path).splitlines()
+

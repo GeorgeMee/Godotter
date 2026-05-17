@@ -1,12 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
-import tempfile
 import time
 from pathlib import Path
 import random
 import re
+
+from godotter.utils.textio import atomic_write_text_utf8, read_text_utf8
 
 
 UID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
@@ -105,7 +106,7 @@ def parse_scene_header(content: str) -> SceneHeader | None:
 
 
 def parse_scene(path: Path) -> ParsedScene:
-    return parse_scene_text(path.read_text(encoding='utf-8'))
+    return parse_scene_text(read_text_utf8(path))
 
 
 def parse_scene_text(content: str) -> ParsedScene:
@@ -184,11 +185,7 @@ def parse_scene_text(content: str) -> ParsedScene:
 
 
 def atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False, dir=path.parent) as handle:
-        handle.write(content)
-        temp_name = handle.name
-    Path(temp_name).replace(path)
+    atomic_write_text_utf8(path, content)
 
 
 def _parse_attrs(raw_attrs: str) -> dict[str, str]:
@@ -196,3 +193,4 @@ def _parse_attrs(raw_attrs: str) -> dict[str, str]:
     for key, quoted, bare in ATTR_RE.findall(raw_attrs):
         attrs[key] = quoted or bare
     return attrs
+

@@ -1,4 +1,4 @@
-.venv/
+﻿.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -12,3 +12,5 @@ dist/
 build/
 *.egg-info/
 References/
+tmp/
+config/projects.toml
