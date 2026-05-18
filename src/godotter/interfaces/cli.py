@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+from pathlib import Path
+
 import typer
 
 from godotter.agent import Agent
@@ -32,6 +36,7 @@ Workflow-first CLI for managing Godot projects with AI assistance.
 Supports multiple LLM providers and provides runtime integration.
 
 Examples:
+    godotter new mygame                    # Create new Godot project
     godotter info                          # Show project info
     godotter providers                     # List available AI providers
     godotter provider use moonshot         # Switch to Moonshot AI
@@ -94,6 +99,162 @@ def info_command() -> None:
         supported_providers=list(SUPPORTED_PROVIDERS),
     )
     typer.echo('Godotter scaffold is initialized.')
+
+
+# Godot project .gitignore template
+GODOT_GITIGNORE = '''# Godot 4+ specific ignores
+.godot/
+.import/
+export/
+export_presets.cfg
+
+# Godot-specific ignores
+*.translation
+
+# Mono-specific ignores
+.mono/
+data_*/
+mono_crash.*.json
+
+# System/tool-specific ignores
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+'''
+
+# Default project.godot template
+PROJECT_GODOT_TEMPLATE = '''; Engine Configuration File
+; Godot version: 4.x
+
+[application]
+config/name="{project_name}"
+config/features=PackedStringArray("4.2", "Forward Plus")
+config/icon="res://icon.svg"
+
+[dotnet]
+project/assembly_name="{project_name}"
+'''
+
+
+@app.command(
+    'new',
+    help='Create a new Godot project with directory structure.',
+)
+def new_command(
+    name: str = typer.Argument(
+        '.',
+        help='Project name or path. Use "." for current directory.',
+    ),
+    no_git: bool = typer.Option(
+        False,
+        '--no-git',
+        help='Skip git initialization.',
+    ),
+) -> None:
+    """Create a new Godot project with proper structure.
+    
+    Creates project directory, initializes Godot project files,
+    sets up git repository (unless --no-git), and creates .gitignore.
+    
+    Examples:
+        godotter new mygame              # Create mygame/ directory
+        godotter new mygame --no-git     # Skip git initialization
+        godotter new .                   # Initialize in current directory
+        godotter new ./projects/demo     # Create in subdirectory
+    """
+    # Determine project path and name
+    if name == '.':
+        project_path = Path.cwd()
+        project_name = project_path.name
+    else:
+        project_path = Path(name).resolve()
+        project_name = project_path.name
+    
+    # Check if directory already exists and is not empty
+    if project_path.exists() and any(project_path.iterdir()):
+        typer.echo(f'❌ Error: Directory "{project_path}" already exists and is not empty.')
+        raise typer.Exit(1)
+    
+    # Create project directory
+    project_path.mkdir(parents=True, exist_ok=True)
+    typer.echo(f'📁 Created project directory: {project_path}')
+    
+    # Create project.godot
+    project_godot = project_path / 'project.godot'
+    project_godot.write_text(PROJECT_GODOT_TEMPLATE.format(project_name=project_name))
+    typer.echo(f'✅ Created project.godot')
+    
+    # Create standard directories
+    dirs = ['scenes', 'scripts', 'assets', 'resources']
+    for dir_name in dirs:
+        (project_path / dir_name).mkdir(exist_ok=True)
+        typer.echo(f'📂 Created {dir_name}/')
+    
+    # Create .gitignore
+    gitignore = project_path / '.gitignore'
+    gitignore.write_text(GODOT_GITIGNORE)
+    typer.echo(f'📝 Created .gitignore')
+    
+    # Initialize git repository
+    if not no_git:
+        try:
+            subprocess.run(
+                ['git', 'init'],
+                cwd=project_path,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ['git', 'add', '.'],
+                cwd=project_path,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ['git', 'commit', '-m', 'Initial commit: Godot project setup'],
+                cwd=project_path,
+                capture_output=True,
+                check=True,
+            )
+            typer.echo(f'🔧 Initialized git repository')
+        except subprocess.CalledProcessError as e:
+            typer.echo(f'⚠️  Warning: Git initialization failed: {e}')
+        except FileNotFoundError:
+            typer.echo(f'⚠️  Warning: Git not found, skipping git initialization')
+    else:
+        typer.echo(f'⏭️  Skipped git initialization (--no-git)')
+    
+    # Display project structure
+    typer.echo('')
+    typer.echo(f'✨ Godot project "{project_name}" created successfully!')
+    typer.echo('')
+    typer.echo('📋 Project structure:')
+    
+    def print_tree(path: Path, prefix: str = '') -> None:
+        items = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name))
+        for i, item in enumerate(items):
+            is_last = i == len(items) - 1
+            connector = '└── ' if is_last else '├── '
+            typer.echo(f'{prefix}{connector}{item.name}')
+            if item.is_dir():
+                extension = '    ' if is_last else '│   '
+                print_tree(item, prefix + extension)
+    
+    typer.echo(f'{project_path.name}/')
+    print_tree(project_path, '')
+    
+    typer.echo('')
+    typer.echo('🚀 Next steps:')
+    typer.echo(f'  cd {project_path.name}')
+    typer.echo('  godotter runtime doctor    # Check Godot environment')
+    typer.echo('  godotter runtime run       # Run the project')
 
 
 @app.command(
