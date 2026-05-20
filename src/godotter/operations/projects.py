@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import subprocess
+import re
 
 from godotter.runtime.scene_parser import generate_minimal_scene, generate_uid
 from godotter.utils.textio import write_text_utf8
@@ -197,7 +198,7 @@ def _copy_project_template(
         if source_path.suffix.lower() in {'.gd', '.tscn', '.tres', '.cfg', '.md', '.txt', '.godot', '.gitignore'}:
             content = source_path.read_text(encoding='utf-8')
             content = content.replace('{{PROJECT_NAME}}', project_name)
-            content = content.replace('{{UID_MAIN_SCENE}}', generate_uid())
+            content = _replace_uid_placeholders(content)
             write_text_utf8(target_path, content)
         else:
             shutil.copy2(source_path, target_path)
@@ -205,3 +206,12 @@ def _copy_project_template(
 
     return created_files, created_dirs
 
+
+_UID_PLACEHOLDER_RE = re.compile(r"\{\{UID_[A-Z0-9_]+\}\}")
+
+
+def _replace_uid_placeholders(content: str) -> str:
+    def _replace(_: re.Match[str]) -> str:
+        return generate_uid()
+
+    return _UID_PLACEHOLDER_RE.sub(_replace, content)

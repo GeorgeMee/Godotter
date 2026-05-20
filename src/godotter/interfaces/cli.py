@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 from godotter.agent import Agent
@@ -25,6 +27,7 @@ from godotter.operations import (
     set_provider_key,
 )
 from godotter.runtime import fix_uid_paths, run_doctor
+from godotter.runtime.validators import validate_managers, validate_structure
 from godotter.tools import ToolRegistry, build_default_tools
 
 app = typer.Typer(
@@ -240,3 +243,51 @@ def runtime_uid_fix_command(
     target = resolve_runtime_target(settings, project=project)
     result = fix_uid_paths(target.workspace_root, dry_run=dry_run)
     typer.echo(format_uid_fix_result(result, dry_run=dry_run, workspace_root=target.workspace_root))
+
+
+@runtime_app.command('validate-structure', help='Validate project directory structure for the Godotter dev mode.')
+def runtime_validate_structure_command(
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    report = validate_structure(root)
+    typer.echo(f'workspace_root={root.as_posix()}')
+    typer.echo(f'ok={str(report.ok).lower()}')
+    for issue in report.issues:
+        typer.echo(f'issue code={issue.code} message={issue.message}')
+    if not report.ok:
+        raise typer.Exit(1)
+
+
+@runtime_app.command('validate-managers', help='Validate Managers/EventBus conventions for level scenes.')
+def runtime_validate_managers_command(
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    levels: Path | None = typer.Option(
+        None,
+        '--levels',
+        help='Levels root directory (defaults to workspace/game/levels).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    if levels:
+        levels_root = levels.resolve() if levels.is_absolute() else (root / levels).resolve()
+    else:
+        levels_root = None
+    report = validate_managers(root, levels_root=levels_root)
+    typer.echo(f'workspace_root={root.as_posix()}')
+    typer.echo(f'levels_root={(levels_root or (root / "game" / "levels")).as_posix()}')
+    typer.echo(f'ok={str(report.ok).lower()}')
+    for issue in report.issues:
+        typer.echo(f'issue code={issue.code} message={issue.message}')
+    if not report.ok:
+        raise typer.Exit(1)
