@@ -1,8 +1,10 @@
 [gd_scene load_steps=2 format=3 uid="{{UID_MAIN_SCENE}}"]
 
+[ext_resource type="Script" path="res://game/core/events/event_bus.gd" id="1_event_bus"]
+
 [node name="Main" type="Node"]
 
 [node name="Managers" type="Node" parent="."]
 
-[node name="EventBus" type="Node" parent="Managers" script=ExtResource("res://game/core/events/event_bus.gd")]
-
+[node name="EventBus" type="Node" parent="Managers"]
+script = ExtResource("1_event_bus")
