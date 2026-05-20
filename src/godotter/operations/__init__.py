@@ -1,5 +1,6 @@
-﻿from godotter.operations.projects import render_project_scaffold_summary, scaffold_godot_project
+from godotter.operations.projects import render_project_scaffold_summary, scaffold_godot_project
 from godotter.operations.providers import (
+    check_provider_connectivity,
     fetch_model_rows,
     format_provider_key_status,
     format_provider_rows,
@@ -18,6 +19,7 @@ from godotter.operations.runtime import (
 
 __all__ = [
     'build_runner',
+    'check_provider_connectivity',
     'fetch_model_rows',
     'format_doctor_report',
     'format_provider_key_status',

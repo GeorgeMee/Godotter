@@ -1,6 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
+
+import requests
 
 from godotter.llm import SUPPORTED_PROVIDERS
 from godotter.llm.catalog import (
@@ -36,6 +40,51 @@ def format_provider_key_status(settings, provider: str) -> str:
     key = current_key_for_provider(settings, selected)
     status = 'configured' if key else 'missing'
     return f'provider={selected}\nstatus={status}\nkey={mask_secret(key)}'
+
+
+def check_provider_connectivity(settings, provider: str, timeout: int = 10) -> str:
+    selected = normalize_provider_name(provider)
+    if selected == 'stub':
+        return 'provider=stub\nok=true\nnote=not-required'
+
+    from godotter.llm.providers import build_provider_spec
+
+    try:
+        spec = build_provider_spec(settings, selected)
+    except ValueError as exc:
+        return f'provider={selected}\nok=false\nerror={exc}'
+
+    url = f'{spec.base_url}/models'
+    try:
+        response = requests.get(
+            url,
+            headers={'Authorization': f'Bearer {spec.api_key}'},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data: dict[str, Any] = response.json()
+        models = [item.get('id') for item in data.get('data', []) if item.get('id')]
+        return f'provider={selected}\nbase_url={spec.base_url}\nok=true\nmodels={len(models)}'
+    except requests.HTTPError:
+        body_preview = _safe_json_preview(response)
+        return (
+            f'provider={selected}\nbase_url={spec.base_url}\nok=false\n'
+            f'status_code={response.status_code}\nerror=http_error\nbody={body_preview}'
+        )
+    except requests.RequestException as exc:
+        return f'provider={selected}\nbase_url={spec.base_url}\nok=false\nerror={type(exc).__name__}: {exc}'
+
+
+def _safe_json_preview(response: requests.Response, max_len: int = 240) -> str:
+    try:
+        data = response.json()
+        text = json.dumps(data, ensure_ascii=False)
+    except ValueError:
+        text = (response.text or '').strip()
+    text = ' '.join(text.split())
+    if len(text) > max_len:
+        return f'{text[:max_len]}...'
+    return text or '(empty)'
 
 
 def fetch_model_rows(settings, provider: str) -> list[str]:

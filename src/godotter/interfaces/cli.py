@@ -9,6 +9,7 @@ from godotter.llm import SUPPORTED_PROVIDERS, create_brain
 from godotter.logging import configure_logging, get_logger
 from godotter.operations import (
     build_runner,
+    check_provider_connectivity,
     fetch_model_rows,
     format_doctor_report,
     format_provider_key_status,
@@ -129,6 +130,18 @@ def provider_use_command(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(f'default provider set to {selected}')
+
+
+@provider_app.command('check', help='Validate API key and connectivity for a provider.')
+def provider_check_command(
+    provider: str | None = typer.Option(
+        None, '--provider', help='Provider name (defaults to current default provider).'
+    ),
+    timeout: int = typer.Option(10, '--timeout', help='Timeout in seconds for the check request.'),
+) -> None:
+    settings = get_settings()
+    selected = normalize_provider_name(provider or settings.default_brain)
+    typer.echo(check_provider_connectivity(settings, selected, timeout=timeout))
 
 
 @provider_key_app.command('show', help='Display the API key status for a provider.')
