@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 import subprocess
@@ -69,6 +69,9 @@ class GitBranchTool(Tool):
 
 
 def _run_git(workspace_root: Path, args: list[str]) -> str:
+    if not (workspace_root / '.git').exists():
+        return 'Error: not a git repository'
+
     try:
         completed = subprocess.run(
             ['git', *args],

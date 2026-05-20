@@ -1,0 +1,47 @@
+﻿from typer.testing import CliRunner
+
+from godotter.interfaces.cli import app
+
+
+runner = CliRunner()
+
+
+def test_project_new_command_creates_scaffold(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ['project', 'new', 'demo', '--no-git'])
+    assert result.exit_code == 0
+
+    project_root = tmp_path / 'demo'
+    assert (project_root / 'project.godot').exists()
+    assert (project_root / '.gitignore').exists()
+    assert (project_root / 'icon.svg').exists()
+    assert (project_root / 'scenes' / 'main.tscn').exists()
+    assert (project_root / 'scripts').is_dir()
+    assert (project_root / 'assets').is_dir()
+    assert (project_root / 'resources').is_dir()
+
+    project_text = (project_root / 'project.godot').read_text(encoding='utf-8')
+    assert 'run/main_scene="res://scenes/main.tscn"' in project_text
+    assert 'config/icon="res://icon.svg"' in project_text
+
+    scene_text = (project_root / 'scenes' / 'main.tscn').read_text(encoding='utf-8')
+    assert '[gd_scene format=3 uid="uid://' in scene_text
+    assert '[node name="Main" type="Node"]' in scene_text
+
+
+def test_project_new_command_writes_no_bom(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ['project', 'new', 'demo', '--no-git'])
+    assert result.exit_code == 0
+
+    for relative in ['project.godot', '.gitignore', 'icon.svg', 'scenes/main.tscn']:
+        payload = (tmp_path / 'demo' / relative).read_bytes()
+        assert not payload.startswith(b'\xef\xbb\xbf')
+
+
+def test_top_level_new_alias_warns_and_delegates(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ['new', 'demo', '--no-git'])
+    assert result.exit_code == 0
+    assert 'deprecated' in result.stdout.lower()
+    assert (tmp_path / 'demo' / 'project.godot').exists()
