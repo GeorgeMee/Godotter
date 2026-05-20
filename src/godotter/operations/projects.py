@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import subprocess
 
 from godotter.runtime.scene_parser import generate_minimal_scene, generate_uid
@@ -70,29 +71,41 @@ def scaffold_godot_project(name: str, *, no_git: bool = False, base_dir: Path | 
 
     project_path.mkdir(parents=True, exist_ok=True)
 
-    directories = [project_path / part for part in ('scenes', 'scripts', 'assets', 'resources')]
-    for directory in directories:
-        directory.mkdir(exist_ok=True)
-
     files_created: list[Path] = []
+    directories_created: list[Path] = []
 
-    project_godot = project_path / 'project.godot'
-    write_text_utf8(project_godot, PROJECT_GODOT_TEMPLATE.format(project_name=project_name))
-    files_created.append(project_godot)
+    template_dir = Path(__file__).resolve().parents[3] / 'templates' / 'godotter_game_template'
+    if template_dir.exists():
+        created_files, created_dirs = _copy_project_template(
+            template_dir=template_dir,
+            project_path=project_path,
+            project_name=project_name,
+        )
+        files_created.extend(created_files)
+        directories_created.extend(created_dirs)
+    else:
+        directories = [project_path / part for part in ('scenes', 'scripts', 'assets', 'resources')]
+        for directory in directories:
+            directory.mkdir(exist_ok=True)
+        directories_created.extend(directories)
 
-    gitignore = project_path / '.gitignore'
-    write_text_utf8(gitignore, GODOT_GITIGNORE)
-    files_created.append(gitignore)
+        project_godot = project_path / 'project.godot'
+        write_text_utf8(project_godot, PROJECT_GODOT_TEMPLATE.format(project_name=project_name))
+        files_created.append(project_godot)
 
-    icon_path = project_path / 'icon.svg'
-    write_text_utf8(icon_path, ICON_SVG_TEMPLATE)
-    files_created.append(icon_path)
+        gitignore = project_path / '.gitignore'
+        write_text_utf8(gitignore, GODOT_GITIGNORE)
+        files_created.append(gitignore)
 
-    scene_path = project_path / 'scenes' / 'main.tscn'
-    scene_uid = generate_uid()
-    scene_content = generate_minimal_scene('Node', 'Main', scene_uid)
-    write_text_utf8(scene_path, scene_content)
-    files_created.append(scene_path)
+        icon_path = project_path / 'icon.svg'
+        write_text_utf8(icon_path, ICON_SVG_TEMPLATE)
+        files_created.append(icon_path)
+
+        scene_path = project_path / 'scenes' / 'main.tscn'
+        scene_uid = generate_uid()
+        scene_content = generate_minimal_scene('Node', 'Main', scene_uid)
+        write_text_utf8(scene_path, scene_content)
+        files_created.append(scene_path)
 
     git_initialized = False
     if not no_git:
@@ -103,7 +116,7 @@ def scaffold_godot_project(name: str, *, no_git: bool = False, base_dir: Path | 
         project_path=project_path,
         git_initialized=git_initialized,
         files_created=files_created,
-        directories_created=directories,
+        directories_created=directories_created,
     )
 
 
@@ -114,21 +127,29 @@ def render_project_scaffold_summary(result: ProjectScaffoldResult, *, no_git: bo
         '',
         'Created directories:',
     ]
-    for directory in result.directories_created:
-        lines.append(f'  - {directory.relative_to(result.project_path).as_posix()}/')
+    for directory in sorted(set(result.directories_created)):
+        try:
+            lines.append(f'  - {directory.relative_to(result.project_path).as_posix()}/')
+        except ValueError:
+            lines.append(f'  - {directory.as_posix()}/')
     lines.append('Created files:')
-    for file_path in result.files_created:
-        lines.append(f'  - {file_path.relative_to(result.project_path).as_posix()}')
+    for file_path in sorted(set(result.files_created)):
+        try:
+            lines.append(f'  - {file_path.relative_to(result.project_path).as_posix()}')
+        except ValueError:
+            lines.append(f'  - {file_path.as_posix()}')
     lines.append(f'Git initialized: {"yes" if result.git_initialized else "no"}')
     if no_git:
         lines.append('Git init skipped by --no-git.')
-    lines.extend([
-        '',
-        'Next steps:',
-        f'  cd {result.project_path.name}',
-        '  godotter runtime doctor',
-        '  godotter runtime run',
-    ])
+    lines.extend(
+        [
+            '',
+            'Next steps:',
+            f'  cd {result.project_path.name}',
+            '  godotter runtime doctor',
+            '  godotter runtime run',
+        ]
+    )
     return '\n'.join(lines)
 
 
@@ -155,3 +176,32 @@ def _initialize_git_repo(project_path: Path) -> bool:
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         return False
+
+
+def _copy_project_template(
+    *, template_dir: Path, project_path: Path, project_name: str
+) -> tuple[list[Path], list[Path]]:
+    created_files: list[Path] = []
+    created_dirs: list[Path] = []
+
+    for source_path in template_dir.rglob('*'):
+        rel = source_path.relative_to(template_dir)
+        target_path = project_path / rel
+
+        if source_path.is_dir():
+            target_path.mkdir(parents=True, exist_ok=True)
+            created_dirs.append(target_path)
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.suffix.lower() in {'.gd', '.tscn', '.tres', '.cfg', '.md', '.txt', '.godot', '.gitignore'}:
+            content = source_path.read_text(encoding='utf-8')
+            content = content.replace('{{PROJECT_NAME}}', project_name)
+            content = content.replace('{{UID_MAIN_SCENE}}', generate_uid())
+            write_text_utf8(target_path, content)
+        else:
+            shutil.copy2(source_path, target_path)
+        created_files.append(target_path)
+
+    return created_files, created_dirs
+

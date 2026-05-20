@@ -15,18 +15,22 @@ def test_project_new_command_creates_scaffold(monkeypatch, tmp_path):
     assert (project_root / 'project.godot').exists()
     assert (project_root / '.gitignore').exists()
     assert (project_root / 'icon.svg').exists()
-    assert (project_root / 'scenes' / 'main.tscn').exists()
-    assert (project_root / 'scripts').is_dir()
-    assert (project_root / 'assets').is_dir()
-    assert (project_root / 'resources').is_dir()
+    assert (project_root / 'game' / 'levels' / 'main.tscn').exists()
+    assert (project_root / 'game' / 'core' / 'events').is_dir()
+    assert (project_root / 'game' / 'systems').is_dir()
+    assert (project_root / 'game' / 'features').is_dir()
+    assert (project_root / 'game' / 'content' / 'prefabs').is_dir()
+    assert (project_root / 'tests' / 'core').is_dir()
 
     project_text = (project_root / 'project.godot').read_text(encoding='utf-8')
-    assert 'run/main_scene="res://scenes/main.tscn"' in project_text
+    assert 'run/main_scene="res://game/levels/main.tscn"' in project_text
     assert 'config/icon="res://icon.svg"' in project_text
 
-    scene_text = (project_root / 'scenes' / 'main.tscn').read_text(encoding='utf-8')
-    assert '[gd_scene format=3 uid="uid://' in scene_text
+    scene_text = (project_root / 'game' / 'levels' / 'main.tscn').read_text(encoding='utf-8')
+    assert '[gd_scene' in scene_text
+    assert 'uid="uid://' in scene_text
     assert '[node name="Main" type="Node"]' in scene_text
+    assert '[node name="Managers" type="Node" parent="."]' in scene_text
 
 
 def test_project_new_command_writes_no_bom(monkeypatch, tmp_path):
@@ -34,7 +38,7 @@ def test_project_new_command_writes_no_bom(monkeypatch, tmp_path):
     result = runner.invoke(app, ['project', 'new', 'demo', '--no-git'])
     assert result.exit_code == 0
 
-    for relative in ['project.godot', '.gitignore', 'icon.svg', 'scenes/main.tscn']:
+    for relative in ['project.godot', '.gitignore', 'icon.svg', 'game/levels/main.tscn']:
         payload = (tmp_path / 'demo' / relative).read_bytes()
         assert not payload.startswith(b'\xef\xbb\xbf')
 
