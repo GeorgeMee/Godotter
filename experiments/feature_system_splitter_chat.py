@@ -103,16 +103,22 @@ CONFIG = ProviderConfig(
 SYSTEM_PROMPT = r"""
 你是游戏项目的架构拆分助手。输入是一段玩法/需求描述。你必须输出严格 JSON，不要输出任何多余文字。
 
-拆分目标：
+拆分目标（面向无头/agent 开发与单元测试）：
 - systems：可复用系统能力（跨 feature 依赖常态，API 稳定，尽量不依赖 features）
-- features：面向玩家体验的玩法域（流程/规则/交互），可依赖 systems
+- features：面向玩家体验的玩法域（流程/规则/交互）；但若只是“UI 展示/渲染”，请明确标记为 UI feature（建议命名以 ui_ 开头）
 - content：prefabs/resources（跨系统/feature 复用的内容，尽量“哑”）
-- levels：关卡是组合层，会启用多个 systems/features，不属于单一 feature
+- 本次不要输出 levels（关卡/模式在架构拆分阶段往往是噪声）。`levels` 字段必须存在但固定输出空数组 `[]`。
 
 拆分约束：
 - 默认禁止 feature -> feature 直接实现依赖；跨 feature 协作优先用结构化事件（EventBus）
 - 需要返回值/强一致的能力用 contracts + Managers 注入（系统接口优先）
 - 每关卡一个 Managers，同类 Mgr 唯一；业务脚本禁止到处 get-from-group
+- 事件避免“每帧/高频事件风暴”（如 soft_drop 每 tick 事件）；优先发布聚合事件（例如 drop_performed、lock_resolved、clear_resolved）
+- 明确“唯一权威”（single source of truth）：例如锁定/消行/胜负判定由一个系统权威负责，避免多个系统同时修改同一状态
+
+必须包含的系统（若玩法描述适用）：
+- game_flow_system（或同等职责）：状态机/流程编排，管理 playing/paused/game_over，以及 spawn->fall->lock->resolve->next 的时序
+- 对战/多人时：将 network 作为 adapter（net_session_adapter），业务规则在 garbage_system 等系统内，不要把业务塞进网络层
 
 输出 JSON schema：
 {
@@ -140,7 +146,7 @@ SYSTEM_PROMPT = r"""
     }
   ],
   "content": [{"kind":"prefab|resource", "name":"...", "notes":"..."}],
-  "levels": [{"name":"...", "uses_systems":[...], "uses_features":[...]}],
+  "levels": [],
   "risk_checks": ["可能出现的环依赖点", "命名冲突点", "哪些地方容易做成隐式依赖"]
 }
 
