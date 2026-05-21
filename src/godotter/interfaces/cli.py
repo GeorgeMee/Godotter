@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+import secrets
 
 import typer
 
@@ -28,6 +30,7 @@ from godotter.operations import (
 )
 from godotter.runtime import fix_uid_paths, run_doctor
 from godotter.runtime.validators import validate_managers, validate_structure
+from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
 from godotter.tools import ToolRegistry, build_default_tools
 
 app = typer.Typer(
@@ -39,12 +42,14 @@ provider_key_app = typer.Typer(help='Manage API keys for AI providers.')
 model_app = typer.Typer(help='Manage AI models (list available, set default).')
 runtime_app = typer.Typer(help='Godot runtime operations (run, lint, diagnose, fix UID issues).')
 project_app = typer.Typer(help='Manage Godot projects and scaffolding.')
+task_app = typer.Typer(help='Prepare and run workpacks for agent tasks.')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
 app.add_typer(model_app, name='model')
 app.add_typer(runtime_app, name='runtime')
 app.add_typer(project_app, name='project')
+app.add_typer(task_app, name='task')
 
 
 @app.callback()
@@ -66,6 +71,114 @@ def info_command() -> None:
         supported_providers=list(SUPPORTED_PROVIDERS),
     )
     typer.echo('Godotter scaffold is initialized.')
+
+
+@task_app.command('prepare', help='Create a WorkPack (compact task context) under .godotter/workpacks/.')
+def task_prepare_command(
+    goal: str = typer.Argument(..., help='Task goal / requirement, in one sentence.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    include: list[str] = typer.Option(
+        [],
+        '--include',
+        help='Additional file paths to include as relevant files (repeatable).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    constraints = [
+        'Obey Godotter dev-mode docs under Docs/.',
+        'Levels must have a root Managers node and a Managers/EventBus child.',
+        'Prefer structured events via EventBus; avoid implicit get-from-group lookups outside Managers.',
+        'Run `godotter runtime validate-structure` and `godotter runtime validate-managers` after changes.',
+    ]
+    relevant: list[WorkPackFileRef] = [
+        WorkPackFileRef(path='Docs/godotter_dev_mode_project_structure.md', reason='Dev-mode conventions', priority=10),
+        WorkPackFileRef(path='Docs/godotter_template_project.md', reason='Template conventions', priority=20),
+    ]
+    for extra in include:
+        relevant.append(WorkPackFileRef(path=extra, reason='User-specified', priority=50))
+
+    pack = WorkPack(
+        task_id=f'wp_{secrets.token_hex(4)}',
+        created_at=datetime.now().isoformat(timespec='seconds'),
+        workspace_root=root.as_posix(),
+        goal=goal,
+        constraints=constraints,
+        relevant_files=relevant,
+        execution_plan=[
+            'Scout: locate relevant files and constraints',
+            'Execute: implement minimal changes within scope',
+            'Verify: run validation commands and tests',
+        ],
+        verification=[
+            'uv run godotter runtime validate-structure',
+            'uv run godotter runtime validate-managers',
+            'uv run pytest -q',
+        ],
+    )
+    out_path = write_workpack(root, pack)
+    typer.echo(f'workpack={out_path.as_posix()}')
+
+
+@task_app.command('run', help='Run an agent task using a WorkPack (defaults to .godotter/workpacks/latest.json).')
+def task_run_command(
+    workpack: Path | None = typer.Option(
+        None,
+        '--workpack',
+        help='Path to a WorkPack JSON file (defaults to .godotter/workpacks/latest.json).',
+    ),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    mode: str = typer.Option('plan', '--mode', help='Agent mode: plan (default), code, review, or debug.'),
+    brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this run.'),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    workpack_path = workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
+    if not workpack_path.exists():
+        raise typer.BadParameter(f'WorkPack not found: {workpack_path}')
+
+    pack = load_workpack(workpack_path)
+
+    configure_logging(settings)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    selected_brain = brain or settings.default_brain
+    agent = Agent(
+        brain=create_brain(settings, selected_brain),
+        settings=settings,
+        registry=registry,
+        memory=memory,
+        mode=mode,
+        brain_name=selected_brain,
+    )
+
+    prompt_lines = [
+        'You are executing a Godotter WorkPack.',
+        f'goal={pack.goal}',
+        '',
+        'Constraints:',
+        *[f'- {c}' for c in pack.constraints],
+        '',
+        'Relevant files:',
+        *[f'- {ref.path} (p{ref.priority}) {ref.reason}'.rstrip() for ref in pack.relevant_files],
+        '',
+        'Execution plan:',
+        *[f'- {step}' for step in pack.execution_plan],
+        '',
+        'Verification:',
+        *[f'- {cmd}' for cmd in pack.verification],
+        '',
+        'Proceed to implement the goal with minimal, testable changes.',
+    ]
+    typer.echo(agent.handle_input('\n'.join(prompt_lines)))
 
 
 @project_app.command('new', help='Create a new Godot project with a minimal runnable scaffold.')

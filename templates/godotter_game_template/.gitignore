@@ -24,3 +24,5 @@ Thumbs.db
 .idea/
 *.code-workspace
 
+# Godotter
+.godotter/workpacks/
