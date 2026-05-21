@@ -29,6 +29,20 @@ from typing import Any
 import requests
 
 
+# Try to load .env automatically (project root) for convenience.
+# Environment variables set in the shell still take precedence.
+def _load_dotenv_default() -> None:
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        return
+
+    repo_root = Path(__file__).resolve().parents[1]
+    env_path = repo_root / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
+
+
 # =========================
 # CONFIG（按需注释切换）
 # =========================
@@ -176,9 +190,13 @@ def _ensure_json_object(text: str) -> dict[str, Any]:
 
 
 def main() -> int:
+    _load_dotenv_default()
     api_key = os.getenv(CONFIG.api_key_env, "").strip()
     if not api_key:
-        print(f"Missing API key env var: {CONFIG.api_key_env}", file=sys.stderr)
+        print(
+            f"Missing API key env var: {CONFIG.api_key_env} (you can set it in shell env or in .env at repo root)",
+            file=sys.stderr,
+        )
         return 2
 
     out_dir = Path(".godotter") / "workpacks"
@@ -246,4 +264,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
