@@ -161,6 +161,7 @@ def _chat_completions(
     api_key: str,
     model: str,
     messages: list[dict[str, str]],
+    stream: bool = False,
     timeout_s: int = 90,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
@@ -174,10 +175,51 @@ def _chat_completions(
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+    if not stream:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    payload["stream"] = True
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s, stream=True)
     resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    return _read_sse_stream(resp)
+
+
+def _read_sse_stream(resp: requests.Response) -> str:
+    """
+    Read OpenAI-compatible SSE stream and return full assistant content.
+    Prints partial content to stdout as it arrives.
+    """
+    chunks: list[str] = []
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        if line.startswith("data: "):
+            data_str = line[6:].strip()
+        else:
+            continue
+        if data_str == "[DONE]":
+            break
+        try:
+            event = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+
+        delta = (
+            event.get("choices", [{}])[0]
+            .get("delta", {})
+            .get("content")
+        )
+        if not delta:
+            continue
+        chunks.append(delta)
+        sys.stdout.write(delta)
+        sys.stdout.flush()
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return "".join(chunks)
 
 
 def _ensure_json_object(text: str) -> dict[str, Any]:
@@ -199,12 +241,19 @@ def main() -> int:
         )
         return 2
 
+    stream = True
+    if "--no-stream" in sys.argv:
+        stream = False
+    if "--stream" in sys.argv:
+        stream = True
+
     out_dir = Path(".godotter") / "workpacks"
     out_dir.mkdir(parents=True, exist_ok=True)
     transcript_path = out_dir / f"feature_split_{CONFIG.name}_{_now_stamp()}.jsonl"
 
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     print(f"provider={CONFIG.name} model={CONFIG.model}")
+    print(f"stream={str(stream).lower()}")
     print("输入玩法描述（支持多行）。空行+空行结束输入：")
 
     # First user message (multi-line)
@@ -238,15 +287,16 @@ def main() -> int:
                 api_key=api_key,
                 model=CONFIG.model,
                 messages=messages,
+                stream=stream,
             )
             obj = _ensure_json_object(raw)
         except Exception as exc:
             print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
 
-        print(json.dumps(obj, ensure_ascii=False, indent=2))
+        if not stream:
+            print(json.dumps(obj, ensure_ascii=False, indent=2))
 
-        transcript_path.write_text("", encoding="utf-8") if not transcript_path.exists() else None
         with transcript_path.open("a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps({"round": round_idx, "role": "assistant", "content": obj}, ensure_ascii=False) + "\n")
 
