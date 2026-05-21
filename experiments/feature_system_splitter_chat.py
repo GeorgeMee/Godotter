@@ -105,7 +105,7 @@ SYSTEM_PROMPT = r"""
 
 拆分目标（面向无头/agent 开发与单元测试）：
 - systems：可复用系统能力（跨 feature 依赖常态，API 稳定，尽量不依赖 features）
-- features：面向玩家体验的玩法域（流程/规则/交互）；但若只是“UI 展示/渲染”，请明确标记为 UI feature（建议命名以 ui_ 开头）
+- features：只包含**游戏核心逻辑/玩法域脚本**（流程/规则/交互），不包含 UI/渲染/音效等表现层内容
 - content：prefabs/resources（跨系统/feature 复用的内容，尽量“哑”）
 - 本次不要输出 levels（关卡/模式在架构拆分阶段往往是噪声）。`levels` 字段必须存在但固定输出空数组 `[]`。
 
@@ -145,6 +145,7 @@ SYSTEM_PROMPT = r"""
       "test_plan": ["..."]
     }
   ],
+  "ui": [],
   "content": [{"kind":"prefab|resource", "name":"...", "notes":"..."}],
   "levels": [],
   "risk_checks": ["可能出现的环依赖点", "命名冲突点", "哪些地方容易做成隐式依赖"]
@@ -154,6 +155,7 @@ SYSTEM_PROMPT = r"""
 - 输出必须是一个 JSON 对象（顶层是 {}）
 - 不允许 Markdown，不允许代码块标记
 - 字段缺失时也要给空数组/空字符串，不要省略键
+- `ui` 字段固定输出空数组（表现层设计不在本次范围）
 """.strip()
 
 
