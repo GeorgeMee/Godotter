@@ -131,6 +131,11 @@ def task_run_command(
         '--workpack',
         help='Path to a WorkPack JSON file (defaults to .godotter/workpacks/latest.json).',
     ),
+    latest: bool = typer.Option(
+        False,
+        '--latest',
+        help='Use .godotter/workpacks/latest.json (overrides --workpack).',
+    ),
     workspace: Path | None = typer.Option(
         None,
         '--workspace',
@@ -141,7 +146,9 @@ def task_run_command(
 ) -> None:
     settings = get_settings()
     root = (workspace or settings.workspace_root).resolve()
-    workpack_path = workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
+    workpack_path = (root / '.godotter' / 'workpacks' / 'latest.json') if latest else (
+        workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
+    )
     if not workpack_path.exists():
         raise typer.BadParameter(f'WorkPack not found: {workpack_path}')
 
@@ -179,6 +186,71 @@ def task_run_command(
         'Proceed to implement the goal with minimal, testable changes.',
     ]
     typer.echo(agent.handle_input('\n'.join(prompt_lines)))
+
+
+@task_app.command('list', help='List WorkPacks under .godotter/workpacks/.')
+def task_list_command(
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    workpack_dir = root / '.godotter' / 'workpacks'
+    if not workpack_dir.exists():
+        typer.echo(f'workpack_dir={workpack_dir.as_posix()}')
+        typer.echo('count=0')
+        return
+
+    paths = sorted(workpack_dir.glob('*.json'), key=lambda p: p.name, reverse=True)
+    paths = [p for p in paths if p.name != 'latest.json']
+    typer.echo(f'workpack_dir={workpack_dir.as_posix()}')
+    typer.echo(f'count={len(paths)}')
+    for path in paths:
+        try:
+            pack = load_workpack(path)
+            typer.echo(f'workpack={path.name} created_at={pack.created_at} task_id={pack.task_id} goal={pack.goal}')
+        except Exception as exc:
+            typer.echo(f'workpack={path.name} error={type(exc).__name__}: {exc}')
+
+
+@task_app.command('show', help='Show a WorkPack summary.')
+def task_show_command(
+    workpack: Path | None = typer.Option(
+        None,
+        '--workpack',
+        help='Path to a WorkPack JSON file (defaults to latest.json).',
+    ),
+    latest: bool = typer.Option(
+        False,
+        '--latest',
+        help='Use .godotter/workpacks/latest.json (overrides --workpack).',
+    ),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    workpack_path = (root / '.godotter' / 'workpacks' / 'latest.json') if latest else (
+        workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
+    )
+    if not workpack_path.exists():
+        raise typer.BadParameter(f'WorkPack not found: {workpack_path}')
+    pack = load_workpack(workpack_path)
+    typer.echo(f'workpack={workpack_path.as_posix()}')
+    typer.echo(f'task_id={pack.task_id}')
+    typer.echo(f'created_at={pack.created_at}')
+    typer.echo(f'workspace_root={pack.workspace_root}')
+    typer.echo(f'goal={pack.goal}')
+    typer.echo(f'constraints={len(pack.constraints)}')
+    typer.echo(f'relevant_files={len(pack.relevant_files)}')
+    typer.echo(f'execution_plan={len(pack.execution_plan)}')
+    typer.echo(f'verification={len(pack.verification)}')
 
 
 @project_app.command('new', help='Create a new Godot project with a minimal runnable scaffold.')
