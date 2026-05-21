@@ -30,6 +30,7 @@ from godotter.operations import (
 )
 from godotter.runtime import fix_uid_paths, run_doctor
 from godotter.runtime.validators import validate_managers, validate_structure
+from godotter.tasks.scout import scout_workspace
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
 from godotter.tools import ToolRegistry, build_default_tools
 
@@ -111,6 +112,56 @@ def task_prepare_command(
         relevant_files=relevant,
         execution_plan=[
             'Scout: locate relevant files and constraints',
+            'Execute: implement minimal changes within scope',
+            'Verify: run validation commands and tests',
+        ],
+        verification=[
+            'uv run godotter runtime validate-structure',
+            'uv run godotter runtime validate-managers',
+            'uv run pytest -q',
+        ],
+    )
+    out_path = write_workpack(root, pack)
+    typer.echo(f'workpack={out_path.as_posix()}')
+
+
+@task_app.command('scout', help='Scan the workspace to build a higher-signal WorkPack before execution.')
+def task_scout_command(
+    goal: str = typer.Argument(..., help='Task goal / requirement, in one sentence.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    max_files: int = typer.Option(40, '--max-files', help='Maximum number of relevant files to include.'),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    scout = scout_workspace(root, goal, max_files=max_files)
+
+    constraints = [
+        'Obey Godotter dev-mode docs under Docs/.',
+        'Levels must have a root Managers node and a Managers/EventBus child.',
+        'Prefer structured events via EventBus; avoid implicit get-from-group lookups outside Managers.',
+        'Run `godotter runtime validate-structure` and `godotter runtime validate-managers` after changes.',
+    ]
+    relevant: list[WorkPackFileRef] = [
+        WorkPackFileRef(path='Docs/godotter_dev_mode_project_structure.md', reason='Dev-mode conventions', priority=10),
+        WorkPackFileRef(path='Docs/godotter_template_project.md', reason='Template conventions', priority=20),
+    ]
+    relevant.extend(scout.relevant_files)
+
+    pack = WorkPack(
+        task_id=f'wp_{secrets.token_hex(4)}',
+        created_at=datetime.now().isoformat(timespec='seconds'),
+        workspace_root=root.as_posix(),
+        goal=goal,
+        constraints=constraints,
+        assumptions=[
+            f'scout_keywords={",".join(scout.keywords)}',
+        ],
+        relevant_files=relevant,
+        execution_plan=[
             'Execute: implement minimal changes within scope',
             'Verify: run validation commands and tests',
         ],
