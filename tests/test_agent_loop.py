@@ -5,7 +5,7 @@ import subprocess
 from godotter.agent import Agent
 from godotter.config import Settings
 from godotter.context import Memory
-from godotter.llm import StubBrain
+from godotter.llm import StubBrain, Thought, ToolCall
 from godotter.tools import ToolRegistry, build_default_tools
 
 
@@ -305,3 +305,35 @@ def test_git_tools_report_repo_state(tmp_path):
 
     branch_result = agent.handle_input('tool git_branch {}')
     assert '*' in branch_result
+
+
+def test_agent_preserves_reasoning_content_on_assistant_messages(tmp_path):
+    class ReasoningBrain(StubBrain):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def think(self, conversation):
+            self.calls += 1
+            if self.calls == 1:
+                return Thought(
+                    text='planning',
+                    tool_calls=[ToolCall(id='tool-1', name='git_status', args={})],
+                    raw_content={'reasoning_content': 'trace-1'},
+                )
+            return Thought(text='done', raw_content={'type': 'text'})
+
+    values = {
+        'GODOTTER_WORKSPACE_ROOT': str(tmp_path),
+        'GODOTTER_MEMORY_PATH': '.godotter/memory.md',
+    }
+    settings = Settings(**values)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    agent = Agent(ReasoningBrain(), settings=settings, registry=registry, memory=memory, mode='plan')
+
+    agent.handle_input('inspect repo')
+
+    assistant_messages = [item for item in agent.conversation if item.get('role') == 'assistant']
+    assert assistant_messages
+    assert assistant_messages[0]['reasoning_content'] == 'trace-1'

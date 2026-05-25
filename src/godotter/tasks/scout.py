@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import subprocess
 
 from godotter.tasks.workpack import WorkPackFileRef
 
@@ -11,6 +12,7 @@ from godotter.tasks.workpack import WorkPackFileRef
 class ScoutResult:
     relevant_files: list[WorkPackFileRef]
     keywords: list[str]
+    changed_files: list[WorkPackFileRef]
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_./:-]{2,}")
@@ -55,9 +57,10 @@ def scout_workspace(
     max_files: int = 40,
     max_file_bytes: int = 256 * 1024,
 ) -> ScoutResult:
+    changed_files = collect_changed_files(workspace_root)
     keywords = extract_keywords(goal)
     if not keywords:
-        return ScoutResult(relevant_files=[], keywords=[])
+        return ScoutResult(relevant_files=changed_files[:max_files], keywords=[], changed_files=changed_files)
 
     candidates = _collect_candidate_files(workspace_root)
     scored: list[tuple[int, Path, str]] = []
@@ -75,12 +78,48 @@ def scout_workspace(
     top = scored[:max_files]
 
     refs: list[WorkPackFileRef] = []
+    seen_paths = {ref.path for ref in changed_files}
+    refs.extend(changed_files[:max_files])
     for score, path, reason in top:
         rel = path.relative_to(workspace_root).as_posix()
+        if rel in seen_paths:
+            continue
         priority = max(1, 200 - score)
         refs.append(WorkPackFileRef(path=rel, reason=reason, priority=priority))
+        if len(refs) >= max_files:
+            break
 
-    return ScoutResult(relevant_files=refs, keywords=keywords)
+    return ScoutResult(relevant_files=refs, keywords=keywords, changed_files=changed_files)
+
+
+def collect_changed_files(workspace_root: Path) -> list[WorkPackFileRef]:
+    if not (workspace_root / ".git").exists():
+        return []
+
+    try:
+        completed = subprocess.run(
+            ["git", "status", "--short", "--untracked-files=all"],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    if completed.returncode != 0:
+        return []
+
+    refs: list[WorkPackFileRef] = []
+    seen_paths: set[str] = set()
+    for line in completed.stdout.splitlines():
+        parsed = _parse_status_line(line, workspace_root)
+        if parsed is None or parsed.path in seen_paths:
+            continue
+        seen_paths.add(parsed.path)
+        refs.append(parsed)
+    return refs
 
 
 def _collect_candidate_files(workspace_root: Path) -> list[Path]:
@@ -109,6 +148,46 @@ def _collect_candidate_files(workspace_root: Path) -> list[Path]:
                 continue
             files.append(path)
     return files
+
+
+def _parse_status_line(line: str, workspace_root: Path) -> WorkPackFileRef | None:
+    if len(line) < 4:
+        return None
+
+    status = line[:2]
+    raw_path = line[3:].strip()
+    if not raw_path:
+        return None
+
+    path_text = raw_path.split(" -> ", 1)[-1]
+    path = (workspace_root / path_text).resolve()
+    try:
+        rel = path.relative_to(workspace_root).as_posix()
+    except ValueError:
+        return None
+
+    reason = f"git:{_status_reason(status)}"
+    priority = 5 if "?" in status else 15
+    return WorkPackFileRef(path=rel, reason=reason, priority=priority)
+
+
+def _status_reason(status: str) -> str:
+    code = status.strip()
+    if code == "??":
+        return "untracked"
+    if "A" in status:
+        return "added"
+    if "M" in status:
+        return "modified"
+    if "D" in status:
+        return "deleted"
+    if "R" in status:
+        return "renamed"
+    if "C" in status:
+        return "copied"
+    if "U" in status:
+        return "unmerged"
+    return "changed"
 
 
 def _score_file(path: Path, keywords: list[str], *, max_file_bytes: int) -> tuple[int, str]:

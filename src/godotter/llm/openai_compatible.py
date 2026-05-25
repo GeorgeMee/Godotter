@@ -33,16 +33,24 @@ class OpenAICompatibleBrain(Brain):
             ]
             payload['tool_choice'] = 'auto'
 
-        response = requests.post(
-            f'{self.provider.base_url}/chat/completions',
-            headers={
-                'Authorization': f'Bearer {self.provider.api_key}',
-                'Content-Type': 'application/json',
-            },
-            json=payload,
-            timeout=120,
-        )
-        response.raise_for_status()
+        try:
+            response = requests.post(
+                f'{self.provider.base_url}/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {self.provider.api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise RuntimeError(self._format_http_error(exc.response)) from exc
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f'LLM request failed: provider={self.provider.name} model={self.provider.model} error={type(exc).__name__}: {exc}'
+            ) from exc
+
         data = response.json()
         self.last_input_tokens = data.get('usage', {}).get('prompt_tokens', 0)
         message = data['choices'][0]['message']
@@ -51,6 +59,7 @@ class OpenAICompatibleBrain(Brain):
             text=message.get('content'),
             tool_calls=tool_calls,
             raw_content=message,
+            thinking=message.get('reasoning_content'),
         )
 
     def _build_messages(self, conversation: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -61,6 +70,9 @@ class OpenAICompatibleBrain(Brain):
             role = item['role']
             if role == 'assistant':
                 entry: dict[str, Any] = {'role': 'assistant', 'content': item.get('content')}
+                reasoning_content = item.get('reasoning_content')
+                if reasoning_content:
+                    entry['reasoning_content'] = reasoning_content
                 if item.get('tool_calls'):
                     entry['tool_calls'] = [
                         {
@@ -95,3 +107,25 @@ class OpenAICompatibleBrain(Brain):
             name=function['name'],
             args=json.loads(arguments),
         )
+
+    def _format_http_error(self, response: requests.Response | None) -> str:
+        if response is None:
+            return f'LLM request failed: provider={self.provider.name} model={self.provider.model} error=http_error'
+
+        return (
+            f'LLM request failed: provider={self.provider.name} model={self.provider.model} '
+            f'status_code={response.status_code} body={_safe_json_preview(response)}'
+        )
+
+
+def _safe_json_preview(response: requests.Response, max_len: int = 400) -> str:
+    try:
+        data = response.json()
+        text = json.dumps(data, ensure_ascii=False)
+    except ValueError:
+        text = (response.text or '').strip()
+
+    text = ' '.join(text.split())
+    if len(text) > max_len:
+        return f'{text[:max_len]}...'
+    return text or '(empty)'

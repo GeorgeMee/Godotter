@@ -2,14 +2,23 @@ extends Node
 
 class_name Managers
 
+const EventBusScript = preload("res://game/core/events/event_bus.gd")
+
 @export var require_event_bus: bool = true
 
 func _ready() -> void:
-	if require_event_bus and get_node_or_null("EventBus") == null:
+	var event_bus := get_node_or_null("EventBus")
+	if require_event_bus and event_bus == null:
 		push_error("Managers: missing child node 'EventBus'")
 		get_tree().quit(1)
+		return
+	if event_bus != null and not (event_bus is EventBusScript):
+		push_error("Managers: child node 'EventBus' does not use EventBus script")
+		get_tree().quit(1)
+		return
 
 	_validate_unique_mgr_groups()
+	_configure_managers(event_bus)
 
 
 func _validate_unique_mgr_groups() -> void:
@@ -30,3 +39,11 @@ func _validate_unique_mgr_groups() -> void:
 		if int(counts[g]) > 1:
 			push_error("Managers: duplicate mgr group '%s' (count=%d)" % [String(g), int(counts[g])])
 			get_tree().quit(1)
+
+
+func _configure_managers(event_bus) -> void:
+	for child in get_children():
+		if child == event_bus:
+			continue
+		if child.has_method("configure"):
+			child.call("configure", event_bus)

@@ -91,12 +91,24 @@ class Agent:
             'role': 'assistant',
             'content': thought.text,
         }
+        reasoning_content = self._extract_reasoning_content(thought)
+        if reasoning_content:
+            message['reasoning_content'] = reasoning_content
         if thought.tool_calls:
             message['tool_calls'] = [
                 {'id': tool_call.id, 'name': tool_call.name, 'args': tool_call.args}
                 for tool_call in thought.tool_calls
             ]
         return message
+
+    def _extract_reasoning_content(self, thought: Thought) -> str | None:
+        if thought.thinking:
+            return thought.thinking
+        if isinstance(thought.raw_content, dict):
+            raw_reasoning = thought.raw_content.get('reasoning_content')
+            if isinstance(raw_reasoning, str) and raw_reasoning.strip():
+                return raw_reasoning
+        return None
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> str:
         tool = self.registry.get(name)

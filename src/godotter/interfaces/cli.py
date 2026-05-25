@@ -3,6 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 import secrets
+import subprocess
 
 import typer
 
@@ -30,7 +31,7 @@ from godotter.operations import (
 )
 from godotter.runtime import fix_uid_paths, run_doctor
 from godotter.runtime.validators import validate_managers, validate_structure
-from godotter.tasks.scout import scout_workspace
+from godotter.tasks.scout import collect_changed_files, scout_workspace
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
 from godotter.tools import ToolRegistry, build_default_tools
 
@@ -159,6 +160,7 @@ def task_scout_command(
         constraints=constraints,
         assumptions=[
             f'scout_keywords={",".join(scout.keywords)}',
+            f'scout_changed_files={",".join(ref.path for ref in scout.changed_files)}',
         ],
         relevant_files=relevant,
         execution_plan=[
@@ -192,11 +194,16 @@ def task_run_command(
         '--workspace',
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
-    mode: str = typer.Option('plan', '--mode', help='Agent mode: plan (default), code, review, or debug.'),
+    mode: str = typer.Option(
+        'plan',
+        '--mode',
+        help='Agent execution mode: plan or act. Deprecated aliases: review->plan, code/debug->act.',
+    ),
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this run.'),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    normalized_mode, mode_note = _normalize_cli_mode(mode)
+    root = (workspace or base_settings.workspace_root).resolve()
     workpack_path = (root / '.godotter' / 'workpacks' / 'latest.json') if latest else (
         workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
     )
@@ -204,6 +211,9 @@ def task_run_command(
         raise typer.BadParameter(f'WorkPack not found: {workpack_path}')
 
     pack = load_workpack(workpack_path)
+    pack_root = Path(pack.workspace_root).resolve() if pack.workspace_root else root
+    execution_root = (workspace or pack_root).resolve()
+    settings = base_settings.model_copy(update={'workspace_root': execution_root})
 
     configure_logging(settings)
     memory = Memory(settings.resolved_memory_path)
@@ -214,7 +224,7 @@ def task_run_command(
         settings=settings,
         registry=registry,
         memory=memory,
-        mode=mode,
+        mode=normalized_mode,
         brain_name=selected_brain,
     )
 
@@ -236,7 +246,12 @@ def task_run_command(
         '',
         'Proceed to implement the goal with minimal, testable changes.',
     ]
+    if mode_note:
+        typer.echo(mode_note)
     typer.echo(agent.handle_input('\n'.join(prompt_lines)))
+    if normalized_mode == 'act':
+        _audit_task_run_changes(settings.workspace_root.resolve())
+        _run_task_verification_commands(settings.workspace_root.resolve(), pack.verification)
 
 
 @task_app.command('list', help='List WorkPacks under .godotter/workpacks/.')
@@ -299,7 +314,12 @@ def task_show_command(
     typer.echo(f'workspace_root={pack.workspace_root}')
     typer.echo(f'goal={pack.goal}')
     typer.echo(f'constraints={len(pack.constraints)}')
+    for assumption in pack.assumptions:
+        typer.echo(f'assumption={assumption}')
     typer.echo(f'relevant_files={len(pack.relevant_files)}')
+    for ref in pack.relevant_files[:10]:
+        suffix = f' {ref.reason}'.rstrip() if ref.reason else ''
+        typer.echo(f'relevant_file path={ref.path} priority={ref.priority}{suffix}')
     typer.echo(f'execution_plan={len(pack.execution_plan)}')
     typer.echo(f'verification={len(pack.verification)}')
 
@@ -329,10 +349,15 @@ def new_command(
 @app.command('chat', help='Start an AI chat session with the specified message.')
 def chat_command(
     message: str = typer.Argument(..., help='The message to send to the AI agent.'),
-    mode: str = typer.Option('plan', '--mode', help='Agent mode: plan (default), code, review, or debug.'),
+    mode: str = typer.Option(
+        'plan',
+        '--mode',
+        help='Agent execution mode: plan or act. Deprecated aliases: review->plan, code/debug->act.',
+    ),
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this session.'),
 ) -> None:
     settings = get_settings()
+    normalized_mode, mode_note = _normalize_cli_mode(mode)
     configure_logging(settings)
     memory = Memory(settings.resolved_memory_path)
     registry = ToolRegistry(build_default_tools())
@@ -342,10 +367,85 @@ def chat_command(
         settings=settings,
         registry=registry,
         memory=memory,
-        mode=mode,
+        mode=normalized_mode,
         brain_name=selected_brain,
     )
+    if mode_note:
+        typer.echo(mode_note)
     typer.echo(agent.handle_input(message))
+
+
+def _normalize_cli_mode(raw_mode: str) -> tuple[str, str | None]:
+    normalized = raw_mode.strip().lower()
+    if normalized in {'plan', 'act'}:
+        return normalized, None
+
+    alias_map = {
+        'review': 'plan',
+        'code': 'act',
+        'debug': 'act',
+    }
+    mapped = alias_map.get(normalized)
+    if mapped:
+        return mapped, f'note=mode_alias input={normalized} mapped_to={mapped}'
+
+    raise typer.BadParameter('Unsupported mode. Use plan or act.')
+
+
+def _audit_task_run_changes(workspace_root: Path) -> None:
+    changed = [ref for ref in collect_changed_files(workspace_root) if not ref.path.startswith('.godotter/')]
+    typer.echo(f'task_run_audit changed_files={len(changed)}')
+    for ref in changed[:10]:
+        typer.echo(f'task_run_change path={ref.path} reason={ref.reason}')
+
+    if not changed:
+        typer.echo('task_run_audit_error=no_workspace_changes')
+        raise typer.Exit(1)
+
+    changed_paths = {ref.path for ref in changed}
+    touches_feature_or_system = any(
+        path.startswith('game/features/') or path.startswith('game/systems/')
+        for path in changed_paths
+    )
+    touches_tests = any(path.startswith('tests/') for path in changed_paths)
+    touches_levels = any(path.startswith('game/levels/') for path in changed_paths)
+
+    if touches_feature_or_system and not touches_tests:
+        typer.echo('task_run_audit_error=missing_tests_for_game_logic_changes')
+        raise typer.Exit(1)
+
+    if touches_feature_or_system and not touches_levels:
+        typer.echo('task_run_audit_error=missing_level_updates_for_game_logic_changes')
+        raise typer.Exit(1)
+
+
+def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -> None:
+    for command in commands:
+        typer.echo(f'task_run_verify command={command}')
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=workspace_root,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                shell=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = (exc.stdout or '').strip() or '(empty)'
+            stderr = (exc.stderr or '').strip() or '(empty)'
+            typer.echo('task_run_verify exit_code=-1 timed_out=true')
+            typer.echo(f'task_run_verify_stdout={stdout}')
+            typer.echo(f'task_run_verify_stderr={stderr}')
+            raise typer.Exit(1) from exc
+
+        stdout = completed.stdout.strip() or '(empty)'
+        stderr = completed.stderr.strip() or '(empty)'
+        typer.echo(f'task_run_verify exit_code={completed.returncode} timed_out=false')
+        typer.echo(f'task_run_verify_stdout={stdout}')
+        typer.echo(f'task_run_verify_stderr={stderr}')
+        if completed.returncode != 0:
+            raise typer.Exit(1)
 
 
 @app.command('providers', help='List all configured AI providers and their current models.')

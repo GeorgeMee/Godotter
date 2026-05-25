@@ -7,3 +7,10 @@
 
 建议将该文档随项目迭代持续更新，并在 feature/system 的 README 中补充事件与依赖。
 
+模板内已包含一个最小事件流样板：
+- `game/features/item_pickup/`
+- `game/systems/inventory/`
+- `tests/features/item_pickup/`
+
+建议新 feature 先参考这条闭环，再扩展自己的事件、manager 和测试 harness。
+

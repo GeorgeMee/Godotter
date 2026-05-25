@@ -1,6 +1,13 @@
-[gd_scene load_steps=2 format=3 uid="{{UID_TEST_HARNESS}}"]
+[gd_scene load_steps=3 format=3 uid="{{UID_TEST_HARNESS}}"]
+
+[ext_resource type="Script" path="res://game/core/events/event_bus.gd" id="1_event_bus"]
+[ext_resource type="Script" path="res://game/core/bootstrap/managers.gd" id="2_managers"]
 
 [node name="TestHarness" type="Node"]
 
 [node name="Managers" type="Node" parent="."]
+script = ExtResource("2_managers")
+
+[node name="EventBus" type="Node" parent="Managers"]
+script = ExtResource("1_event_bus")
 
