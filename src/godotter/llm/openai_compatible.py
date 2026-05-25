@@ -13,6 +13,7 @@ class OpenAICompatibleBrain(Brain):
     def __init__(self, provider: ProviderSpec, system_prompt: str | None = None, tools: list[dict[str, Any]] | None = None) -> None:
         super().__init__(system_prompt=system_prompt, tools=tools)
         self.provider = provider
+        self.tool_choice: str = 'auto'
 
     def think(self, conversation: list[dict[str, Any]]) -> Thought:
         payload: dict[str, Any] = {
@@ -31,7 +32,7 @@ class OpenAICompatibleBrain(Brain):
                 }
                 for tool in self.tools
             ]
-            payload['tool_choice'] = 'auto'
+            payload['tool_choice'] = self.tool_choice
 
         try:
             response = requests.post(
@@ -45,7 +46,25 @@ class OpenAICompatibleBrain(Brain):
             )
             response.raise_for_status()
         except requests.HTTPError as exc:
-            raise RuntimeError(self._format_http_error(exc.response)) from exc
+            # Some OpenAI-compatible providers do not support tool_choice="required".
+            # Retry once with tool_choice="auto" to avoid hard failure.
+            if self.tools and self.tool_choice == 'required' and exc.response is not None:
+                try:
+                    payload['tool_choice'] = 'auto'
+                    response = requests.post(
+                        f'{self.provider.base_url}/chat/completions',
+                        headers={
+                            'Authorization': f'Bearer {self.provider.api_key}',
+                            'Content-Type': 'application/json',
+                        },
+                        json=payload,
+                        timeout=120,
+                    )
+                    response.raise_for_status()
+                except requests.RequestException as inner:
+                    raise RuntimeError(self._format_http_error(getattr(inner, 'response', None))) from inner
+            else:
+                raise RuntimeError(self._format_http_error(exc.response)) from exc
         except requests.RequestException as exc:
             raise RuntimeError(
                 f'LLM request failed: provider={self.provider.name} model={self.provider.model} error={type(exc).__name__}: {exc}'

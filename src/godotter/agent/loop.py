@@ -129,6 +129,9 @@ class Agent:
     def _refresh_brain_context(self) -> None:
         self.brain.tools = self.registry.definitions(self.mode)
         self.brain.system_prompt = self._build_system_prompt()
+        # Best-effort: force at least one tool call in act mode for OpenAI-compatible providers.
+        if hasattr(self.brain, 'tool_choice'):
+            setattr(self.brain, 'tool_choice', 'required' if self.mode == 'act' else 'auto')
 
     def _build_system_prompt(self) -> str:
         parts = []
