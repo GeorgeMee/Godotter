@@ -246,6 +246,16 @@ def task_run_command(
         '',
         'Proceed to implement the goal with minimal, testable changes.',
     ]
+    if normalized_mode == 'act':
+        prompt_lines.extend(
+            [
+                '',
+                'Act-mode requirements:',
+                '- You must make real workspace changes using tools (prefer apply_patch).',
+                '- Do not only describe changes; apply them.',
+                '- After changes, ensure verification commands pass.',
+            ]
+        )
     if mode_note:
         typer.echo(mode_note)
     typer.echo(agent.handle_input('\n'.join(prompt_lines)))
