@@ -262,7 +262,11 @@ def task_run_command(
     typer.echo(agent_output)
     if normalized_mode == 'act':
         _maybe_apply_unified_diff(settings.workspace_root.resolve(), agent_output)
-        _audit_task_run_changes(settings.workspace_root.resolve())
+        try:
+            _audit_task_run_changes(settings.workspace_root.resolve())
+        except typer.Exit:
+            _dump_task_debug(agent)
+            raise
         _run_task_verification_commands(settings.workspace_root.resolve(), pack.verification)
 
 
@@ -482,6 +486,26 @@ def _maybe_apply_unified_diff(workspace_root: Path, text: str) -> None:
         typer.echo(f'task_run_patch_error={type(exc).__name__}: {exc}')
         raise typer.Exit(1) from exc
     typer.echo(f'task_run_patch_applied={result}')
+
+
+def _dump_task_debug(agent: Agent) -> None:
+    try:
+        tail = agent.conversation[-12:]
+    except Exception:
+        return
+    typer.echo(f'task_run_debug_tail={len(tail)}')
+    for msg in tail:
+        role = msg.get('role')
+        if role == 'assistant':
+            tool_calls = msg.get('tool_calls') or []
+            typer.echo(f'task_run_debug role=assistant has_tool_calls={bool(tool_calls)}')
+        elif role == 'tool':
+            tool_call_id = msg.get('tool_call_id')
+            content = (msg.get('content') or '').strip()
+            preview = ' '.join(content.split())[:200] if content else '(empty)'
+            typer.echo(f'task_run_debug role=tool id={tool_call_id} preview={preview}')
+        elif role == 'user':
+            typer.echo('task_run_debug role=user')
 
 
 @app.command('providers', help='List all configured AI providers and their current models.')
