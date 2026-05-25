@@ -11,6 +11,10 @@ from godotter.tools.base import Tool, ToolContext
 from godotter.utils.textio import read_text_utf8, write_text_utf8
 
 
+def _normalize_newlines(text: str) -> str:
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
 @dataclass(slots=True)
 class PatchTarget:
     path: Path
@@ -35,7 +39,7 @@ class GeneratePatch(Tool):
 
     def execute(self, context: ToolContext, **kwargs: Any) -> str:
         path = context.resolve_path(str(kwargs['path']))
-        original = read_text_utf8(path) if path.exists() else ''
+        original = _normalize_newlines(read_text_utf8(path)) if path.exists() else ''
 
         if 'new_content' in kwargs and kwargs['new_content'] is not None:
             updated = str(kwargs['new_content'])
@@ -108,11 +112,11 @@ class ApplyPatch(Tool):
             return PatchTarget(path=path, original_lines=[], is_new=True)
         if patched_file.is_removed_file:
             path = context.resolve_path(_normalize_diff_path(patched_file.source_file))
-            original = read_text_utf8(path).splitlines(True)
+            original = _normalize_newlines(read_text_utf8(path)).splitlines(True)
             return PatchTarget(path=path, original_lines=original, is_delete=True)
 
         path = context.resolve_path(_normalize_diff_path(patched_file.source_file))
-        original = read_text_utf8(path).splitlines(True)
+        original = _normalize_newlines(read_text_utf8(path)).splitlines(True)
         return PatchTarget(path=path, original_lines=original)
 
     def _apply_file_patch(self, patched_file: Any, target: PatchTarget) -> str:
