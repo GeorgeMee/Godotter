@@ -135,5 +135,11 @@ class Agent:
         if self.memory is not None:
             parts.append(self.memory.content)
         parts.append(f'Current mode: {self.mode}.')
-        parts.append('Use tools when structured repository inspection is needed.')
+        if self.mode == 'act':
+            parts.append(
+                'Act mode rules: make real workspace changes. Prefer tool calls (apply_patch, etc). '
+                'If tool calls are unavailable, output a single unified diff starting with "diff --git" and nothing else.'
+            )
+        else:
+            parts.append('Use tools when structured repository inspection is needed.')
         return '\n\n'.join(parts)
