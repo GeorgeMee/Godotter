@@ -251,15 +251,17 @@ def task_run_command(
             [
                 '',
                 'Act-mode requirements:',
-                '- You must make real workspace changes using tools (prefer apply_patch).',
-                '- Do not only describe changes; apply them.',
+                '- If tool-calls are available, use apply_patch and other tools to make changes.',
+                '- If tool-calls are not available, output a single unified diff patch (no commentary).',
                 '- After changes, ensure verification commands pass.',
             ]
         )
     if mode_note:
         typer.echo(mode_note)
-    typer.echo(agent.handle_input('\n'.join(prompt_lines)))
+    agent_output = agent.handle_input('\n'.join(prompt_lines))
+    typer.echo(agent_output)
     if normalized_mode == 'act':
+        _maybe_apply_unified_diff(settings.workspace_root.resolve(), agent_output)
         _audit_task_run_changes(settings.workspace_root.resolve())
         _run_task_verification_commands(settings.workspace_root.resolve(), pack.verification)
 
@@ -456,6 +458,30 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
         typer.echo(f'task_run_verify_stderr={stderr}')
         if completed.returncode != 0:
             raise typer.Exit(1)
+
+
+def _maybe_apply_unified_diff(workspace_root: Path, text: str) -> None:
+    stripped = (text or '').lstrip()
+    if not stripped.startswith('diff --git '):
+        return
+
+    registry = ToolRegistry(build_default_tools())
+    tool = registry.get('apply_patch')
+    if tool is None:
+        typer.echo('task_run_patch_error=apply_patch_tool_missing')
+        raise typer.Exit(1)
+
+    context = ToolContext(
+        settings=get_settings(),
+        workspace_root=workspace_root.resolve(),
+        memory=None,
+    )
+    try:
+        result = tool.execute(context, patch=text)
+    except Exception as exc:
+        typer.echo(f'task_run_patch_error={type(exc).__name__}: {exc}')
+        raise typer.Exit(1) from exc
+    typer.echo(f'task_run_patch_applied={result}')
 
 
 @app.command('providers', help='List all configured AI providers and their current models.')
