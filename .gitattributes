@@ -1,0 +1,19 @@
+# Normalize text files to LF in the repository for cross-platform diffs/patches.
+* text=auto eol=lf
+
+# Explicitly enforce LF for common text formats used by Godotter/Godot.
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.env  text eol=lf
+*.gd   text eol=lf
+*.tscn text eol=lf
+*.tres text eol=lf
+*.cfg  text eol=lf
+*.godot text eol=lf
+*.gitignore text eol=lf
+
