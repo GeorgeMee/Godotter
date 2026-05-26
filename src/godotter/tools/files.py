@@ -3,9 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from godotter.tools.base import Tool, ToolContext
+from godotter.utils.textio import read_text_utf8
 
 
 IGNORED_PARTS = {'.git', '.venv', '__pycache__', 'References', '.godotter'}
+
+
+def _normalize_newlines(text: str) -> str:
+    return text.replace('\r\n', '\n').replace('\r', '\n')
 
 
 class ReadFile(Tool):
@@ -23,7 +28,7 @@ class ReadFile(Tool):
         path = context.resolve_path(str(kwargs['path']))
         if not path.exists():
             return f'Error: File not found: {path.relative_to(context.workspace_root)}'
-        content = path.read_text(encoding='utf-8')
+        content = _normalize_newlines(read_text_utf8(path))
         return ''.join(f'{index} | {line}\n' for index, line in enumerate(content.splitlines(), start=1))
 
 
@@ -74,7 +79,8 @@ class SearchCode(Tool):
             if any(part in IGNORED_PARTS for part in relative.parts):
                 continue
             try:
-                lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+                content = _normalize_newlines(read_text_utf8(path))
+                lines = content.splitlines()
             except OSError:
                 continue
             for index, line in enumerate(lines, start=1):
