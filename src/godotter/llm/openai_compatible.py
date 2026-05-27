@@ -48,7 +48,15 @@ class OpenAICompatibleBrain(Brain):
         except requests.HTTPError as exc:
             # Some OpenAI-compatible providers do not support tool_choice="required".
             # Retry once with tool_choice="auto" to avoid hard failure.
-            if self.tools and self.tool_choice == 'required' and exc.response is not None:
+            if self.tools and payload.get('tool_choice') != 'auto' and exc.response is not None:
+                body = _safe_json_preview(exc.response)
+                should_retry = (
+                    self.tool_choice == 'required'
+                    or exc.response.status_code in {400, 422}
+                    or ('tool_choice' in body and 'thinking' in body)
+                )
+                if not should_retry:
+                    raise RuntimeError(self._format_http_error(exc.response)) from exc
                 try:
                     payload['tool_choice'] = 'auto'
                     response = requests.post(
