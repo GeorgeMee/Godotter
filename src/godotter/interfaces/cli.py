@@ -1,9 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 import secrets
 import subprocess
+import json
 
 import typer
 
@@ -31,6 +32,18 @@ from godotter.operations import (
 )
 from godotter.runtime import fix_uid_paths, run_doctor
 from godotter.runtime.validators import validate_managers, validate_structure
+from godotter.tasks.planpack import (
+    PlanPack,
+    PlanState,
+    PlanTask,
+    load_planpack,
+    load_planstate,
+    new_plan_id,
+    new_task_id,
+    plan_state_path,
+    write_planpack,
+    write_planstate,
+)
 from godotter.tasks.scout import collect_changed_files, scout_workspace
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
 from godotter.tools import ToolRegistry, build_default_tools
@@ -45,6 +58,7 @@ model_app = typer.Typer(help='Manage AI models (list available, set default).')
 runtime_app = typer.Typer(help='Godot runtime operations (run, lint, diagnose, fix UID issues).')
 project_app = typer.Typer(help='Manage Godot projects and scaffolding.')
 task_app = typer.Typer(help='Prepare and run workpacks for agent tasks.')
+plan_app = typer.Typer(help='Prepare and run multi-step plans (PlanPacks).')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
@@ -52,6 +66,7 @@ app.add_typer(model_app, name='model')
 app.add_typer(runtime_app, name='runtime')
 app.add_typer(project_app, name='project')
 app.add_typer(task_app, name='task')
+app.add_typer(plan_app, name='plan')
 
 
 @app.callback()
@@ -339,6 +354,317 @@ def task_show_command(
     typer.echo(f'execution_plan={len(pack.execution_plan)}')
     typer.echo(f'verification={len(pack.verification)}')
 
+
+@plan_app.command('prepare', help='Create a PlanPack (multi-step task plan) under .godotter/plans/.')
+def plan_prepare_command(
+    goal: str = typer.Argument(..., help='High-level goal to split into smaller tasks.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for planning.'),
+) -> None:
+    base_settings = get_settings()
+    root = (workspace or base_settings.workspace_root).resolve()
+    settings = base_settings.model_copy(update={'workspace_root': root})
+
+    configure_logging(settings)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    selected_brain = brain or settings.default_brain
+    agent = Agent(
+        brain=create_brain(settings, selected_brain),
+        settings=settings,
+        registry=registry,
+        memory=memory,
+        mode='plan',
+        brain_name=selected_brain,
+    )
+
+    scout = scout_workspace(root, goal, max_files=40)
+    constraints = [
+        'Split work into small, independently verifiable tasks.',
+        'Each task must declare scope and verification commands.',
+        'Prefer changing one system/feature per task.',
+        'If task changes game/features or game/systems, include tests changes in same task.',
+    ]
+    prompt = '\n'.join(
+        [
+            'Create a multi-step implementation plan as JSON.',
+            'Output must be a JSON object with keys: tasks (array).',
+            'Each task must have: title, goal, scope (array of path prefixes), acceptance (array), verification (array), depends_on (array).',
+            'Keep tasks small (5-10 tasks).',
+            '',
+            f'goal={goal}',
+            '',
+            'Relevant files (scout):',
+            *[f'- {ref.path} {ref.reason}'.rstrip() for ref in scout.relevant_files[:20]],
+        ]
+    )
+    raw = agent.handle_input(prompt)
+    try:
+        parsed = json.loads(raw.strip())
+    except Exception as exc:
+        raise typer.BadParameter(f'Planner did not return JSON: {exc}') from exc
+
+    raw_tasks = parsed.get('tasks', [])
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        raise typer.BadParameter('Planner JSON missing tasks[]')
+
+    tasks: list[PlanTask] = []
+    used_ids: set[str] = set()
+    for index, item in enumerate(raw_tasks, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_id = str(item.get('id', '')).strip()
+        task_id = raw_id or f't{index}'
+        if task_id in used_ids:
+            task_id = f'{task_id}_{index}'
+        used_ids.add(task_id)
+        tasks.append(
+            PlanTask(
+                id=task_id,
+                title=str(item.get('title', '')).strip() or 'task',
+                goal=str(item.get('goal', '')).strip() or '',
+                depends_on=[str(x) for x in item.get('depends_on', []) if x],
+                scope=[str(x) for x in item.get('scope', []) if x],
+                acceptance=[str(x) for x in item.get('acceptance', []) if x],
+                verification=[str(x) for x in item.get('verification', []) if x],
+            )
+        )
+
+    task_ids = {t.id for t in tasks}
+    missing_deps = sorted({dep for t in tasks for dep in t.depends_on if dep not in task_ids})
+    if missing_deps:
+        raise typer.BadParameter(f'Planner returned unknown depends_on ids: {missing_deps}')
+
+    pack = PlanPack(
+        plan_id=new_plan_id(),
+        created_at=datetime.now().isoformat(timespec='seconds'),
+        workspace_root=root.as_posix(),
+        goal=goal,
+        global_constraints=constraints,
+        tasks=tasks,
+    )
+    out_path = write_planpack(root, pack)
+    state = PlanState(
+        plan_id=pack.plan_id,
+        updated_at=datetime.now().isoformat(timespec='seconds'),
+        task_status={task.id: 'pending' for task in tasks},
+    )
+    write_planstate(plan_state_path(out_path), state)
+    latest_path = root / '.godotter' / 'plans' / 'latest.json'
+    if latest_path.exists():
+        write_planstate(plan_state_path(latest_path), state)
+    typer.echo(f'plan={out_path.as_posix()}')
+    typer.echo(f'tasks={len(tasks)}')
+
+
+@plan_app.command('list', help='List PlanPacks under .godotter/plans/.')
+def plan_list_command(
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    plan_dir = root / '.godotter' / 'plans'
+    if not plan_dir.exists():
+        typer.echo(f'plan_dir={plan_dir.as_posix()}')
+        typer.echo('count=0')
+        return
+    paths = sorted(plan_dir.glob('*.json'), key=lambda p: p.name, reverse=True)
+    paths = [p for p in paths if p.name != 'latest.json' and not p.name.endswith('.state.json')]
+    typer.echo(f'plan_dir={plan_dir.as_posix()}')
+    typer.echo(f'count={len(paths)}')
+    for path in paths:
+        try:
+            pack = load_planpack(path)
+            typer.echo(f'plan={path.name} created_at={pack.created_at} plan_id={pack.plan_id} goal={pack.goal}')
+        except Exception as exc:
+            typer.echo(f'plan={path.name} error={type(exc).__name__}: {exc}')
+
+
+@plan_app.command('show', help='Show PlanPack summary.')
+def plan_show_command(
+    plan: Path | None = typer.Option(None, '--plan', help='Path to PlanPack JSON file (defaults to latest.json).'),
+    latest: bool = typer.Option(False, '--latest', help='Use .godotter/plans/latest.json.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    plan_path = (root / '.godotter' / 'plans' / 'latest.json') if latest else (plan or (root / '.godotter' / 'plans' / 'latest.json'))
+    if not plan_path.exists():
+        raise typer.BadParameter(f'PlanPack not found: {plan_path}')
+    pack = load_planpack(plan_path)
+    typer.echo(f'plan={plan_path.as_posix()}')
+    typer.echo(f'plan_id={pack.plan_id}')
+    typer.echo(f'created_at={pack.created_at}')
+    typer.echo(f'workspace_root={pack.workspace_root}')
+    typer.echo(f'goal={pack.goal}')
+    typer.echo(f'tasks={len(pack.tasks)}')
+    for task in pack.tasks[:15]:
+        typer.echo(f'task id={task.id} title={task.title}')
+
+
+@plan_app.command('status', help='Show PlanPack run status (.state.json).')
+def plan_status_command(
+    plan: Path | None = typer.Option(None, '--plan', help='Path to PlanPack JSON file (defaults to latest.json).'),
+    latest: bool = typer.Option(False, '--latest', help='Use .godotter/plans/latest.json.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    plan_path = (root / '.godotter' / 'plans' / 'latest.json') if latest else (plan or (root / '.godotter' / 'plans' / 'latest.json'))
+    if not plan_path.exists():
+        raise typer.BadParameter(f'PlanPack not found: {plan_path}')
+    state_path = plan_state_path(plan_path)
+    if not state_path.exists():
+        typer.echo(f'state={state_path.as_posix()}')
+        typer.echo('status=(missing)')
+        return
+    state = load_planstate(state_path)
+    typer.echo(f'state={state_path.as_posix()}')
+    typer.echo(f'updated_at={state.updated_at}')
+    for task_id, status in state.task_status.items():
+        typer.echo(f'task id={task_id} status={status}')
+
+
+@plan_app.command('run', help='Run tasks in a PlanPack sequentially (creates WorkPacks and executes them).')
+def plan_run_command(
+    plan: Path | None = typer.Option(None, '--plan', help='Path to PlanPack JSON file (defaults to latest.json).'),
+    latest: bool = typer.Option(False, '--latest', help='Use .godotter/plans/latest.json.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    from_task: str | None = typer.Option(None, '--from', help='Start from this task id (inclusive).'),
+    only_task: str | None = typer.Option(None, '--only', help='Run only this task id (ignores --from).'),
+    rerun_passed: bool = typer.Option(False, '--rerun-passed', help='Re-run tasks already marked pass in state.'),
+    continue_on_fail: bool = typer.Option(False, '--continue-on-fail', help='Continue running later tasks after a failure.'),
+    brain: str | None = typer.Option(None, '--brain', help='Override default brain/provider for execution.'),
+) -> None:
+    base_settings = get_settings()
+    root = (workspace or base_settings.workspace_root).resolve()
+    plan_path = (root / '.godotter' / 'plans' / 'latest.json') if latest else (plan or (root / '.godotter' / 'plans' / 'latest.json'))
+    if not plan_path.exists():
+        raise typer.BadParameter(f'PlanPack not found: {plan_path}')
+    pack = load_planpack(plan_path)
+    state_path = plan_state_path(plan_path)
+    state = load_planstate(state_path) if state_path.exists() else PlanState(plan_id=pack.plan_id, updated_at=datetime.now().isoformat(timespec='seconds'))
+
+    # Determine task sequence.
+    tasks = pack.tasks
+    task_by_id = {t.id: t for t in tasks}
+    if len(task_by_id) != len(tasks):
+        raise typer.BadParameter('PlanPack contains duplicate task ids.')
+
+    if only_task:
+        if only_task not in task_by_id:
+            raise typer.BadParameter(f'Unknown task id: {only_task}')
+        tasks = [task_by_id[only_task]]
+    elif from_task:
+        idx = next((i for i, t in enumerate(tasks) if t.id == from_task), None)
+        if idx is None:
+            raise typer.BadParameter(f'Unknown task id: {from_task}')
+        tasks = tasks[idx:]
+
+    # Topologically order remaining tasks by depends_on where possible.
+    if len(tasks) > 1:
+        remaining_ids = {t.id for t in tasks}
+        indegree: dict[str, int] = {t.id: 0 for t in tasks}
+        edges: dict[str, list[str]] = {t.id: [] for t in tasks}
+        for t in tasks:
+            for dep in t.depends_on:
+                if dep not in remaining_ids:
+                    continue
+                indegree[t.id] += 1
+                edges.setdefault(dep, []).append(t.id)
+        queue = [t.id for t in tasks if indegree[t.id] == 0]
+        ordered_ids: list[str] = []
+        while queue:
+            current = queue.pop(0)
+            ordered_ids.append(current)
+            for nxt in edges.get(current, []):
+                indegree[nxt] -= 1
+                if indegree[nxt] == 0:
+                    queue.append(nxt)
+        if len(ordered_ids) == len(tasks):
+            tasks = [task_by_id[i] for i in ordered_ids]
+        else:
+            typer.echo('note=dependency_cycle_or_missing_deps_using_declared_order')
+
+    for task in tasks:
+        previous_status = state.task_status.get(task.id)
+        if previous_status == 'pass' and not rerun_passed:
+            state.task_status[task.id] = 'skipped'
+            state.updated_at = datetime.now().isoformat(timespec='seconds')
+            write_planstate(state_path, state)
+            typer.echo(f'task_skipped id={task.id} title={task.title} reason=already_passed')
+            continue
+
+        state.task_status[task.id] = 'running'
+        state.updated_at = datetime.now().isoformat(timespec='seconds')
+        write_planstate(state_path, state)
+
+        # Build a WorkPack from task details.
+        settings = base_settings.model_copy(update={'workspace_root': root})
+        selected_brain = brain or settings.default_brain
+
+        scout_refs: list[WorkPackFileRef] = []
+        if not task.scope:
+            scoped_scout = scout_workspace(root, task.goal or task.title, max_files=25)
+            scout_refs = [
+                WorkPackFileRef(path=ref.path, reason=ref.reason or 'scout', priority=15) for ref in scoped_scout.relevant_files[:15]
+            ]
+
+        wp = WorkPack(
+            task_id=f'wp_{secrets.token_hex(4)}',
+            created_at=datetime.now().isoformat(timespec='seconds'),
+            workspace_root=root.as_posix(),
+            goal=task.goal or task.title,
+            constraints=pack.global_constraints,
+            assumptions=[],
+            relevant_files=[WorkPackFileRef(path=p, reason='scope', priority=30) for p in task.scope] + scout_refs,
+            execution_plan=task.acceptance or [task.title],
+            verification=task.verification or [
+                'uv run godotter runtime validate-structure',
+                'uv run godotter runtime validate-managers',
+                'uv run pytest -q',
+            ],
+        )
+        wp_path = write_workpack(root, wp)
+        typer.echo(f'workpack={wp_path.as_posix()} task_id={task.id} title={task.title}')
+
+        # Execute workpack using existing task runner logic (same process).
+        try:
+            task_run_command(workpack=wp_path, latest=False, workspace=root, mode='act', brain=selected_brain)
+        except Exception as exc:
+            state.task_status[task.id] = 'fail'
+            state.task_artifacts[task.id] = {'error': f'{type(exc).__name__}: {exc}', 'workpack': wp_path.as_posix()}
+            state.updated_at = datetime.now().isoformat(timespec='seconds')
+            write_planstate(state_path, state)
+            if continue_on_fail:
+                typer.echo(f'task_failed_continue id={task.id} title={task.title}')
+                continue
+            raise
+
+        state.task_status[task.id] = 'pass'
+        state.task_artifacts[task.id] = {'workpack': wp_path.as_posix()}
+        state.updated_at = datetime.now().isoformat(timespec='seconds')
+        write_planstate(state_path, state)
 
 @project_app.command('new', help='Create a new Godot project with a minimal runnable scaffold.')
 def project_new_command(
