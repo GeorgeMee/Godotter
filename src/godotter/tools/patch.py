@@ -72,11 +72,18 @@ class ApplyPatch(Tool):
         'properties': {
             'patch': {'type': 'string', 'description': 'Unified diff text to apply.'},
             'patch_path': {'type': 'string', 'description': 'Optional path to a patch file relative to the workspace root.'},
+            'path': {'type': 'string', 'description': 'Optional: target file path relative to workspace root.'},
+            'new_content': {'type': 'string', 'description': 'Optional: full replacement content when path is provided.'},
+            'old_text': {'type': 'string', 'description': 'Optional: exact text to replace when path is provided.'},
+            'new_text': {'type': 'string', 'description': 'Optional: replacement text when old_text is provided.'},
         },
     }
 
     def execute(self, context: ToolContext, **kwargs: Any) -> str:
-        patch_text = self._load_patch_text(context, kwargs)
+        if kwargs.get('path'):
+            patch_text = self._build_patch_from_edit(context, kwargs)
+        else:
+            patch_text = self._load_patch_text(context, kwargs)
         if not patch_text.strip():
             return 'Error: Patch content is empty.'
 
@@ -97,6 +104,32 @@ class ApplyPatch(Tool):
                 write_text_utf8(target.path, result)
             applied.append(str(relative))
         return 'Applied patch to: ' + ', '.join(applied)
+
+    def _build_patch_from_edit(self, context: ToolContext, kwargs: dict[str, Any]) -> str:
+        path = context.resolve_path(str(kwargs['path']))
+        original = _normalize_newlines(read_text_utf8(path)) if path.exists() else ''
+
+        if 'new_content' in kwargs and kwargs['new_content'] is not None:
+            updated = str(kwargs['new_content'])
+        else:
+            old_text = str(kwargs.get('old_text', ''))
+            new_text = str(kwargs.get('new_text', ''))
+            if not old_text:
+                return 'Error: Provide new_content or old_text/new_text.'
+            if old_text not in original:
+                relative = path.relative_to(context.workspace_root).as_posix()
+                return f'Error: old_text not found in {relative}'
+            updated = original.replace(old_text, new_text, 1)
+
+        relative = path.relative_to(context.workspace_root).as_posix()
+        diff = difflib.unified_diff(
+            original.splitlines(True),
+            _normalize_newlines(updated).splitlines(True),
+            fromfile=f'a/{relative}',
+            tofile=f'b/{relative}',
+        )
+        rendered = ''.join(diff)
+        return rendered if rendered else 'No changes.'
 
     def _load_patch_text(self, context: ToolContext, kwargs: dict[str, Any]) -> str:
         if kwargs.get('patch'):
