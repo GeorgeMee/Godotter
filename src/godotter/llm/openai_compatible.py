@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import requests
+from requests import ReadTimeout
 
 from godotter.llm.providers import ProviderSpec
 from godotter.llm.types import Brain, Thought, ToolCall
@@ -14,6 +15,7 @@ class OpenAICompatibleBrain(Brain):
         super().__init__(system_prompt=system_prompt, tools=tools)
         self.provider = provider
         self.tool_choice: str | dict[str, Any] = 'auto'
+        self.request_timeout_s: int = 120
 
     def think(self, conversation: list[dict[str, Any]]) -> Thought:
         payload: dict[str, Any] = {
@@ -42,7 +44,7 @@ class OpenAICompatibleBrain(Brain):
                     'Content-Type': 'application/json',
                 },
                 json=payload,
-                timeout=120,
+                timeout=self.request_timeout_s,
             )
             response.raise_for_status()
         except requests.HTTPError as exc:
@@ -66,13 +68,30 @@ class OpenAICompatibleBrain(Brain):
                             'Content-Type': 'application/json',
                         },
                         json=payload,
-                        timeout=120,
+                        timeout=self.request_timeout_s,
                     )
                     response.raise_for_status()
                 except requests.RequestException as inner:
                     raise RuntimeError(self._format_http_error(getattr(inner, 'response', None))) from inner
             else:
                 raise RuntimeError(self._format_http_error(exc.response)) from exc
+        except ReadTimeout:
+            # Retry once on read timeout (provider may be slow for large prompts).
+            try:
+                response = requests.post(
+                    f'{self.provider.base_url}/chat/completions',
+                    headers={
+                        'Authorization': f'Bearer {self.provider.api_key}',
+                        'Content-Type': 'application/json',
+                    },
+                    json=payload,
+                    timeout=self.request_timeout_s,
+                )
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                raise RuntimeError(
+                    f'LLM request failed: provider={self.provider.name} model={self.provider.model} error={type(exc).__name__}: {exc}'
+                ) from exc
         except requests.RequestException as exc:
             raise RuntimeError(
                 f'LLM request failed: provider={self.provider.name} model={self.provider.model} error={type(exc).__name__}: {exc}'

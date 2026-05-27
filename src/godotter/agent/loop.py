@@ -134,6 +134,8 @@ class Agent:
         # Best-effort: force at least one tool call in act mode for OpenAI-compatible providers.
         if hasattr(self.brain, 'tool_choice'):
             setattr(self.brain, 'tool_choice', 'required' if self.mode == 'act' else 'auto')
+        if hasattr(self.brain, 'request_timeout_s'):
+            setattr(self.brain, 'request_timeout_s', 300 if self.mode == 'act' else 120)
 
     def _build_system_prompt(self) -> str:
         parts = []
