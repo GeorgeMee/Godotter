@@ -34,19 +34,24 @@ class GodotRunner:
 
     def _run(self, args: list[str], timeout: int) -> GodotRunResult:
         start = time.perf_counter()
+        def _decode(value) -> str:
+            if value is None:
+                return ''
+            if isinstance(value, bytes):
+                return value.decode('utf-8', errors='replace')
+            return str(value)
         try:
             completed = subprocess.run(
                 [self.godot_path, *args],
                 cwd=self.workspace_root,
                 capture_output=True,
-                text=True,
                 timeout=timeout,
             )
             duration_ms = int((time.perf_counter() - start) * 1000)
             return GodotRunResult(
                 exit_code=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
+                stdout=_decode(completed.stdout),
+                stderr=_decode(completed.stderr),
                 timed_out=False,
                 duration_ms=duration_ms,
             )
@@ -54,8 +59,8 @@ class GodotRunner:
             duration_ms = int((time.perf_counter() - start) * 1000)
             return GodotRunResult(
                 exit_code=-1,
-                stdout=exc.stdout or '',
-                stderr=exc.stderr or '',
+                stdout=_decode(exc.stdout),
+                stderr=_decode(exc.stderr),
                 timed_out=True,
                 duration_ms=duration_ms,
             )

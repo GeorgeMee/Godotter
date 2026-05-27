@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import typer
 
@@ -21,8 +21,8 @@ def build_runner(settings, project: str | None = None) -> GodotRunner:
 
 
 def format_runtime_result(command: str, target: str, result) -> str:
-    stdout = result.stdout.strip() or '(empty)'
-    stderr = result.stderr.strip() or '(empty)'
+    stdout = (getattr(result, 'stdout', '') or '').strip() or '(empty)'
+    stderr = (getattr(result, 'stderr', '') or '').strip() or '(empty)'
     lines = [
         f'command={command}',
         f'target={target}',

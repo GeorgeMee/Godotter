@@ -841,6 +841,7 @@ def _audit_task_run_changes(workspace_root: Path, *, allow_no_changes: bool = Fa
 
 def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -> None:
     for command in commands:
+        command = _rewrite_verification_command(workspace_root, command)
         typer.echo(f'task_run_verify command={command}')
         try:
             completed = subprocess.run(
@@ -869,6 +870,26 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
         typer.echo(f'task_run_verify_stderr={stderr}')
         if completed.returncode != 0:
             raise typer.Exit(1)
+
+
+def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
+    raw = (command or '').strip()
+    if not raw:
+        return raw
+
+    # Fix common case: planner uses bare filename for runtime lint.
+    prefix = 'uv run godotter runtime lint --project . '
+    if raw.startswith(prefix):
+        path = raw[len(prefix) :].strip().strip('"').strip("'")
+        if path and ("/" not in path and "\\" not in path):
+            candidate = workspace_root / path
+            if not candidate.exists():
+                matches = list(workspace_root.rglob(path))
+                matches = [m for m in matches if m.is_file()]
+                if len(matches) == 1:
+                    rel = matches[0].relative_to(workspace_root).as_posix()
+                    return f'{prefix}{rel}'
+    return raw
 
 
 def _normalize_verification_commands(commands: list[str]) -> list[str]:
@@ -1062,6 +1083,8 @@ def runtime_lint_command(
         result = runner.lint_project(timeout=timeout)
         target = '(project)'
     typer.echo(format_runtime_result('script_lint', target, result))
+    if result.exit_code != 0:
+        raise typer.Exit(1)
 
 
 @runtime_app.command('run', help='Run the Godot project or a specific scene.')
@@ -1074,6 +1097,8 @@ def runtime_run_command(
     runner = build_runner(settings, project=project)
     result = runner.run_project(timeout=timeout, scene=scene)
     typer.echo(format_runtime_result('headless_run', scene or '(project)', result))
+    if result.exit_code != 0 or result.timed_out:
+        raise typer.Exit(1)
 
 
 @runtime_app.command('doctor', help='Diagnose Godot environment and project health.')
