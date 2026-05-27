@@ -895,7 +895,11 @@ def _normalize_verification_commands(commands: list[str]) -> list[str]:
                 if len(parts) >= 2:
                     path = parts[-1].strip('"').strip("'")
             if path:
-                normalized.append(f'uv run godotter runtime lint --project . {path}')
+                # `runtime lint` only accepts a script path; if a directory is given, lint the whole project.
+                if path.endswith('/') or path.endswith('\\'):
+                    normalized.append('uv run godotter runtime lint --project .')
+                else:
+                    normalized.append(f'uv run godotter runtime lint --project . {path}')
             else:
                 normalized.append('uv run godotter runtime lint --project .')
             continue
