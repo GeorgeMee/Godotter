@@ -5,6 +5,7 @@ from pathlib import Path
 import secrets
 import subprocess
 import json
+import sys
 
 import typer
 
@@ -44,9 +45,21 @@ from godotter.tasks.planpack import (
     write_planpack,
     write_planstate,
 )
-from godotter.tasks.scout import collect_changed_files, scout_workspace
+from godotter.tasks.scout import collect_changed_files, scout_workspace, write_task_run_baseline
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
 from godotter.tools import ToolRegistry, build_default_tools
+
+
+def _ensure_utf8_stdio() -> None:
+    # Avoid Windows cp936/gbk UnicodeEncodeError when LLM outputs emoji/symbols.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8')  # type: ignore[attr-defined]
+        except Exception:
+            continue
+
+
+_ensure_utf8_stdio()
 
 app = typer.Typer(
     help='Godotter CLI - AI-assisted Godot development tool.',
@@ -273,6 +286,10 @@ def task_run_command(
         )
     if mode_note:
         typer.echo(mode_note)
+
+    if normalized_mode == 'act':
+        write_task_run_baseline(settings.workspace_root.resolve())
+
     agent_output = agent.handle_input('\n'.join(prompt_lines))
     typer.echo(agent_output)
     if normalized_mode == 'act':
@@ -403,10 +420,31 @@ def plan_prepare_command(
         ]
     )
     raw = agent.handle_input(prompt)
+    raw_stripped = raw.strip()
+    parsed: dict
     try:
-        parsed = json.loads(raw.strip())
-    except Exception as exc:
-        raise typer.BadParameter(f'Planner did not return JSON: {exc}') from exc
+        parsed = json.loads(raw_stripped)
+    except Exception:
+        # Try to extract the first JSON object from a mixed response.
+        start = raw_stripped.find('{')
+        end = raw_stripped.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                parsed = json.loads(raw_stripped[start : end + 1])
+            except Exception as exc:
+                debug_path = root / '.godotter' / 'plans' / 'last_planner_output.txt'
+                debug_path.parent.mkdir(parents=True, exist_ok=True)
+                debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
+                raise typer.BadParameter(
+                    f'Planner did not return JSON: {exc} (saved raw to {debug_path.as_posix()})'
+                ) from exc
+        else:
+            debug_path = root / '.godotter' / 'plans' / 'last_planner_output.txt'
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
+            raise typer.BadParameter(
+                f'Planner did not return JSON: could not find JSON object (saved raw to {debug_path.as_posix()})'
+            )
 
     raw_tasks = parsed.get('tasks', [])
     if not isinstance(raw_tasks, list) or not raw_tasks:
@@ -435,6 +473,29 @@ def plan_prepare_command(
         )
 
     task_ids = {t.id for t in tasks}
+    title_to_id = {}
+    for t in tasks:
+        key = t.title.strip().lower()
+        if key and key not in title_to_id:
+            title_to_id[key] = t.id
+
+    # Normalize depends_on: allow planner to reference either ids or titles.
+    for t in tasks:
+        normalized: list[str] = []
+        for dep in t.depends_on:
+            dep_norm = dep.strip()
+            if not dep_norm:
+                continue
+            if dep_norm in task_ids:
+                normalized.append(dep_norm)
+                continue
+            mapped = title_to_id.get(dep_norm.lower())
+            if mapped:
+                normalized.append(mapped)
+                continue
+            normalized.append(dep_norm)
+        t.depends_on = normalized
+
     missing_deps = sorted({dep for t in tasks for dep in t.depends_on if dep not in task_ids})
     if missing_deps:
         raise typer.BadParameter(f'Planner returned unknown depends_on ids: {missing_deps}')

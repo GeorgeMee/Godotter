@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
+import json
 
 from godotter.tasks.workpack import WorkPackFileRef
 
@@ -94,7 +95,18 @@ def scout_workspace(
 
 def collect_changed_files(workspace_root: Path) -> list[WorkPackFileRef]:
     if not (workspace_root / ".git").exists():
-        return []
+        baseline_path = _task_run_baseline_path(workspace_root)
+        if not baseline_path.exists():
+            return []
+        try:
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except OSError:
+            return []
+        except Exception:
+            return []
+
+        current = _snapshot_workspace(workspace_root)
+        return _diff_snapshots(baseline, current)
 
     try:
         completed = subprocess.run(
@@ -119,6 +131,69 @@ def collect_changed_files(workspace_root: Path) -> list[WorkPackFileRef]:
             continue
         seen_paths.add(parsed.path)
         refs.append(parsed)
+    return refs
+
+
+def _task_run_baseline_path(workspace_root: Path) -> Path:
+    return workspace_root / ".godotter" / ".task_run_baseline.json"
+
+
+def write_task_run_baseline(workspace_root: Path) -> Path:
+    baseline_path = _task_run_baseline_path(workspace_root)
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_path.write_text(
+        json.dumps(_snapshot_workspace(workspace_root), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return baseline_path
+
+
+def clear_task_run_baseline(workspace_root: Path) -> None:
+    path = _task_run_baseline_path(workspace_root)
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        return
+
+
+def _snapshot_workspace(workspace_root: Path) -> dict[str, dict]:
+    snapshot: dict[str, dict] = {}
+    for path in _collect_candidate_files(workspace_root):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        try:
+            rel = path.relative_to(workspace_root).as_posix()
+        except ValueError:
+            continue
+        snapshot[rel] = {"size": int(st.st_size), "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))}
+    return snapshot
+
+
+def _diff_snapshots(before: dict, after: dict) -> list[WorkPackFileRef]:
+    before_files = {k: v for k, v in before.items() if isinstance(k, str) and isinstance(v, dict)}
+    after_files = {k: v for k, v in after.items() if isinstance(k, str) and isinstance(v, dict)}
+
+    refs: list[WorkPackFileRef] = []
+    all_paths = sorted(set(before_files) | set(after_files))
+    for rel in all_paths:
+        if rel.startswith(".godotter/"):
+            continue
+        b = before_files.get(rel)
+        a = after_files.get(rel)
+        if b is None and a is not None:
+            refs.append(WorkPackFileRef(path=rel, reason="snapshot:new", priority=10))
+            continue
+        if b is not None and a is None:
+            refs.append(WorkPackFileRef(path=rel, reason="snapshot:deleted", priority=10))
+            continue
+        if not isinstance(b, dict) or not isinstance(a, dict):
+            continue
+        if (b.get("size"), b.get("mtime_ns")) != (a.get("size"), a.get("mtime_ns")):
+            refs.append(WorkPackFileRef(path=rel, reason="snapshot:modified", priority=15))
     return refs
 
 

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
@@ -58,10 +58,32 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     # Load .env for CLI usage without coupling tests (or library usage) to filesystem state.
     # Shell environment variables still take precedence.
+    #
+    # We search upward from the current working directory so a repo-level `.env`
+    # can configure shared API keys for multiple Godot projects, while still
+    # allowing a per-project `.env` to override by being closer.
     try:
-        from dotenv import load_dotenv  # type: ignore
+        from dotenv import dotenv_values  # type: ignore
     except Exception:
-        load_dotenv = None
-    if load_dotenv is not None:
-        load_dotenv(dotenv_path='.env', override=False, encoding='utf-8')
+        dotenv_values = None
+    if dotenv_values is not None:
+        cwd = Path.cwd().resolve()
+        env_paths: list[Path] = []
+        for candidate in [*reversed(list(cwd.parents)), cwd]:
+            p = candidate / '.env'
+            if p.exists():
+                env_paths.append(p)
+
+        merged: dict[str, str] = {}
+        for p in env_paths:
+            values = dotenv_values(p, encoding='utf-8')
+            for k, v in values.items():
+                if k and v is not None:
+                    merged[str(k)] = str(v)
+
+        import os
+
+        for k, v in merged.items():
+            # Do not override shell environment variables.
+            os.environ.setdefault(k, v)
     return Settings()
