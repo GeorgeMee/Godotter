@@ -111,6 +111,8 @@ class Agent:
         return None
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> str:
+        if self.mode == 'act' and name == 'generate_patch':
+            return "Error: Tool 'generate_patch' is not allowed in act mode. Use 'apply_patch' to modify files."
         tool = self.registry.get(name)
         if tool is None:
             return f"Error: Tool '{name}' not found"
@@ -131,7 +133,17 @@ class Agent:
         self.brain.system_prompt = self._build_system_prompt()
         # Best-effort: force at least one tool call in act mode for OpenAI-compatible providers.
         if hasattr(self.brain, 'tool_choice'):
-            setattr(self.brain, 'tool_choice', 'required' if self.mode == 'act' else 'auto')
+            if self.mode == 'act':
+                setattr(
+                    self.brain,
+                    'tool_choice',
+                    {
+                        'type': 'function',
+                        'function': {'name': 'apply_patch'},
+                    },
+                )
+            else:
+                setattr(self.brain, 'tool_choice', 'auto')
 
     def _build_system_prompt(self) -> str:
         parts = []

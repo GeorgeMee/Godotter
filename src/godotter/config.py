@@ -9,8 +9,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file='.env',
-        env_file_encoding='utf-8',
         extra='ignore',
     )
 
@@ -58,4 +56,12 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # Load .env for CLI usage without coupling tests (or library usage) to filesystem state.
+    # Shell environment variables still take precedence.
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        load_dotenv = None
+    if load_dotenv is not None:
+        load_dotenv(dotenv_path='.env', override=False, encoding='utf-8')
     return Settings()

@@ -13,7 +13,7 @@ class OpenAICompatibleBrain(Brain):
     def __init__(self, provider: ProviderSpec, system_prompt: str | None = None, tools: list[dict[str, Any]] | None = None) -> None:
         super().__init__(system_prompt=system_prompt, tools=tools)
         self.provider = provider
-        self.tool_choice: str = 'auto'
+        self.tool_choice: str | dict[str, Any] = 'auto'
 
     def think(self, conversation: list[dict[str, Any]]) -> Thought:
         payload: dict[str, Any] = {
