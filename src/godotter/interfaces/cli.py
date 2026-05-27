@@ -227,6 +227,11 @@ def task_run_command(
         '--mode',
         help='Agent execution mode: plan or act. Deprecated aliases: review->plan, code/debug->act.',
     ),
+    allow_no_changes: bool = typer.Option(
+        False,
+        '--allow-no-changes',
+        help='Allow act-mode runs that only verify existing code without modifying files.',
+    ),
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this run.'),
 ) -> None:
     base_settings = get_settings()
@@ -295,7 +300,7 @@ def task_run_command(
     if normalized_mode == 'act':
         _maybe_apply_unified_diff(settings.workspace_root.resolve(), agent_output)
         try:
-            _audit_task_run_changes(settings.workspace_root.resolve())
+            _audit_task_run_changes(settings.workspace_root.resolve(), allow_no_changes=allow_no_changes)
         except typer.Exit:
             _dump_task_debug(agent)
             raise
@@ -691,6 +696,12 @@ def plan_run_command(
                 WorkPackFileRef(path=ref.path, reason=ref.reason or 'scout', priority=15) for ref in scoped_scout.relevant_files[:15]
             ]
 
+        verification_commands = _normalize_verification_commands(task.verification) or [
+            'uv run godotter runtime validate-structure',
+            'uv run godotter runtime validate-managers',
+            'uv run godotter runtime lint --project .',
+        ]
+
         wp = WorkPack(
             task_id=f'wp_{secrets.token_hex(4)}',
             created_at=datetime.now().isoformat(timespec='seconds'),
@@ -700,18 +711,21 @@ def plan_run_command(
             assumptions=[],
             relevant_files=[WorkPackFileRef(path=p, reason='scope', priority=30) for p in task.scope] + scout_refs,
             execution_plan=task.acceptance or [task.title],
-            verification=task.verification or [
-                'uv run godotter runtime validate-structure',
-                'uv run godotter runtime validate-managers',
-                'uv run pytest -q',
-            ],
+            verification=verification_commands,
         )
         wp_path = write_workpack(root, wp)
         typer.echo(f'workpack={wp_path.as_posix()} task_id={task.id} title={task.title}')
 
         # Execute workpack using existing task runner logic (same process).
         try:
-            task_run_command(workpack=wp_path, latest=False, workspace=root, mode='act', brain=selected_brain)
+            task_run_command(
+                workpack=wp_path,
+                latest=False,
+                workspace=root,
+                mode='act',
+                brain=selected_brain,
+                allow_no_changes=True,
+            )
         except Exception as exc:
             state.task_status[task.id] = 'fail'
             state.task_artifacts[task.id] = {'error': f'{type(exc).__name__}: {exc}', 'workpack': wp_path.as_posix()}
@@ -795,13 +809,16 @@ def _normalize_cli_mode(raw_mode: str) -> tuple[str, str | None]:
     raise typer.BadParameter('Unsupported mode. Use plan or act.')
 
 
-def _audit_task_run_changes(workspace_root: Path) -> None:
+def _audit_task_run_changes(workspace_root: Path, *, allow_no_changes: bool = False) -> None:
     changed = [ref for ref in collect_changed_files(workspace_root) if not ref.path.startswith('.godotter/')]
     typer.echo(f'task_run_audit changed_files={len(changed)}')
     for ref in changed[:10]:
         typer.echo(f'task_run_change path={ref.path} reason={ref.reason}')
 
     if not changed:
+        if allow_no_changes:
+            typer.echo('note=task_run_audit_allow_no_workspace_changes')
+            return
         typer.echo('task_run_audit_error=no_workspace_changes')
         raise typer.Exit(1)
 
@@ -830,25 +847,74 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
                 command,
                 cwd=workspace_root,
                 capture_output=True,
-                text=True,
                 timeout=300,
                 shell=True,
             )
         except subprocess.TimeoutExpired as exc:
-            stdout = (exc.stdout or '').strip() or '(empty)'
-            stderr = (exc.stderr or '').strip() or '(empty)'
+            out_b = exc.stdout or b''
+            err_b = exc.stderr or b''
+            stdout = out_b.decode('utf-8', errors='replace').strip() or '(empty)'
+            stderr = err_b.decode('utf-8', errors='replace').strip() or '(empty)'
             typer.echo('task_run_verify exit_code=-1 timed_out=true')
             typer.echo(f'task_run_verify_stdout={stdout}')
             typer.echo(f'task_run_verify_stderr={stderr}')
             raise typer.Exit(1) from exc
 
-        stdout = completed.stdout.strip() or '(empty)'
-        stderr = completed.stderr.strip() or '(empty)'
+        out_b = completed.stdout or b''
+        err_b = completed.stderr or b''
+        stdout = out_b.decode('utf-8', errors='replace').strip() or '(empty)'
+        stderr = err_b.decode('utf-8', errors='replace').strip() or '(empty)'
         typer.echo(f'task_run_verify exit_code={completed.returncode} timed_out=false')
         typer.echo(f'task_run_verify_stdout={stdout}')
         typer.echo(f'task_run_verify_stderr={stderr}')
         if completed.returncode != 0:
             raise typer.Exit(1)
+
+
+def _normalize_verification_commands(commands: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for cmd in commands or []:
+        raw = str(cmd).strip()
+        if not raw:
+            continue
+        lower = raw.lower()
+
+        if raw.startswith('uv ') or raw.startswith('godotter '):
+            normalized.append(raw)
+            continue
+
+        if 'script_lint' in lower:
+            # Accept a few common shapes produced by models/tool logs.
+            path = None
+            if 'target=' in raw:
+                path = raw.split('target=', 1)[1].strip().split()[0].strip('"').strip("'")
+            elif ' on ' in lower:
+                path = raw.split(' on ', 1)[1].strip().split()[0].strip('"').strip("'")
+            else:
+                parts = raw.split()
+                if len(parts) >= 2:
+                    path = parts[-1].strip('"').strip("'")
+            if path:
+                normalized.append(f'uv run godotter runtime lint --project . {path}')
+            else:
+                normalized.append('uv run godotter runtime lint --project .')
+            continue
+
+        if 'headless_run' in lower or 'headless run' in lower:
+            scene = None
+            if 'target=' in raw:
+                scene = raw.split('target=', 1)[1].strip().split()[0].strip('"').strip("'")
+            else:
+                # try to find a res:// token
+                for token in raw.split():
+                    if token.startswith('res://'):
+                        scene = token.strip('"').strip("'")
+                        break
+            if scene:
+                normalized.append(f'uv run godotter runtime run --project . --scene {scene} --timeout 30')
+            continue
+
+    return normalized
 
 
 def _maybe_apply_unified_diff(workspace_root: Path, text: str) -> None:

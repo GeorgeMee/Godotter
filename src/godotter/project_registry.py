@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,7 +54,22 @@ def load_project_registry(path: Path) -> ProjectRegistry:
 
 def resolve_runtime_target(settings, project: str | None = None) -> RuntimeTarget:
     registry = load_project_registry(settings.resolved_project_registry_path)
-    selected = _optional_string(project) or _optional_string(settings.default_project_name) or registry.default_project
+    # If `--project` looks like a path and exists, treat it as a direct workspace root.
+    direct = _optional_string(project)
+    if direct:
+        try:
+            direct_path = Path(direct)
+            if direct_path.exists():
+                return RuntimeTarget(
+                    project_name=None,
+                    workspace_root=direct_path.resolve(),
+                    godot_path=settings.godot_path,
+                    main_scene=None,
+                )
+        except Exception:
+            pass
+
+    selected = direct or _optional_string(settings.default_project_name) or registry.default_project
     if selected:
         entry = registry.projects.get(selected)
         if entry is None:
