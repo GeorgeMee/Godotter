@@ -899,6 +899,11 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
     if not raw:
         return raw
 
+    # Some models append trailing markers like "passes"/"succeeds" as plain words.
+    for suffix in (' passes', ' succeeds', ' success', ' ok'):
+        if raw.endswith(suffix):
+            raw = raw[: -len(suffix)].rstrip()
+
     if raw == 'uv run godotter runtime lint --project . (project-wide)':
         return 'uv run godotter runtime lint --project .'
     if raw == 'uv run godotter runtime lint --project . all':
