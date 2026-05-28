@@ -901,6 +901,8 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
 
     if raw == 'uv run godotter runtime lint --project . (project-wide)':
         return 'uv run godotter runtime lint --project .'
+    if raw == 'uv run godotter runtime lint --project . all':
+        return 'uv run godotter runtime lint --project .'
 
     # Fix common case: planner uses bare filename for runtime lint.
     prefix = 'uv run godotter runtime lint --project . '
