@@ -1126,7 +1126,7 @@ def runtime_lint_command(
 @runtime_app.command('run', help='Run the Godot project or a specific scene.')
 def runtime_run_command(
     scene: str | None = typer.Option(None, '--scene', help='Scene file path to run (runs main scene if omitted).'),
-    timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for the run operation.'),
+    timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for the run operation (0 = no timeout).'),
     project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
     headless: bool = typer.Option(False, '--headless', help='Run with Godot --headless (recommended for CI/tests).'),
 ) -> None:

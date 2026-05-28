@@ -49,11 +49,12 @@ class GodotRunner:
                 return value.decode('utf-8', errors='replace')
             return str(value)
         try:
+            timeout_arg = None if timeout <= 0 else timeout
             completed = subprocess.run(
                 [self.godot_path, *args],
                 cwd=self.workspace_root,
                 capture_output=True,
-                timeout=timeout,
+                timeout=timeout_arg,
             )
             duration_ms = int((time.perf_counter() - start) * 1000)
             return GodotRunResult(
