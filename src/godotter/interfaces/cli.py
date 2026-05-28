@@ -232,6 +232,11 @@ def task_run_command(
         '--allow-no-changes',
         help='Allow act-mode runs that only verify existing code without modifying files.',
     ),
+    strict_audit: bool = typer.Option(
+        True,
+        '--strict-audit/--no-strict-audit',
+        help='Fail fast on audit violations (default: strict). Plan runs may disable strict audit and rely on final verification.',
+    ),
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this run.'),
 ) -> None:
     base_settings = get_settings()
@@ -293,14 +298,21 @@ def task_run_command(
         typer.echo(mode_note)
 
     if normalized_mode == 'act':
-        write_task_run_baseline(settings.workspace_root.resolve())
+        # Only create baseline once per workspace so we can diff after multiple act runs.
+        baseline_path = settings.workspace_root.resolve() / '.godotter' / '.task_run_baseline.json'
+        if not baseline_path.exists():
+            write_task_run_baseline(settings.workspace_root.resolve())
 
     agent_output = agent.handle_input('\n'.join(prompt_lines))
     typer.echo(agent_output)
     if normalized_mode == 'act':
         _maybe_apply_unified_diff(settings.workspace_root.resolve(), agent_output)
         try:
-            _audit_task_run_changes(settings.workspace_root.resolve(), allow_no_changes=allow_no_changes)
+            _audit_task_run_changes(
+                settings.workspace_root.resolve(),
+                allow_no_changes=allow_no_changes,
+                strict=strict_audit,
+            )
         except typer.Exit:
             _dump_task_debug(agent)
             raise
@@ -725,6 +737,7 @@ def plan_run_command(
                 mode='act',
                 brain=selected_brain,
                 allow_no_changes=True,
+                strict_audit=False,
             )
         except Exception as exc:
             state.task_status[task.id] = 'fail'
@@ -809,7 +822,12 @@ def _normalize_cli_mode(raw_mode: str) -> tuple[str, str | None]:
     raise typer.BadParameter('Unsupported mode. Use plan or act.')
 
 
-def _audit_task_run_changes(workspace_root: Path, *, allow_no_changes: bool = False) -> None:
+def _audit_task_run_changes(
+    workspace_root: Path,
+    *,
+    allow_no_changes: bool = False,
+    strict: bool = True,
+) -> None:
     changed = [ref for ref in collect_changed_files(workspace_root) if not ref.path.startswith('.godotter/')]
     typer.echo(f'task_run_audit changed_files={len(changed)}')
     for ref in changed[:10]:
@@ -831,12 +849,16 @@ def _audit_task_run_changes(workspace_root: Path, *, allow_no_changes: bool = Fa
     touches_levels = any(path.startswith('game/levels/') for path in changed_paths)
 
     if touches_feature_or_system and not touches_tests:
-        typer.echo('task_run_audit_error=missing_tests_for_game_logic_changes')
-        raise typer.Exit(1)
+        if strict:
+            typer.echo('task_run_audit_error=missing_tests_for_game_logic_changes')
+            raise typer.Exit(1)
+        typer.echo('task_run_audit_warn=missing_tests_for_game_logic_changes')
 
     if touches_feature_or_system and not touches_levels:
-        typer.echo('task_run_audit_error=missing_level_updates_for_game_logic_changes')
-        raise typer.Exit(1)
+        if strict:
+            typer.echo('task_run_audit_error=missing_level_updates_for_game_logic_changes')
+            raise typer.Exit(1)
+        typer.echo('task_run_audit_warn=missing_level_updates_for_game_logic_changes')
 
 
 def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -> None:
@@ -876,6 +898,9 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
     raw = (command or '').strip()
     if not raw:
         return raw
+
+    if raw == 'uv run godotter runtime lint --project . (project-wide)':
+        return 'uv run godotter runtime lint --project .'
 
     # Fix common case: planner uses bare filename for runtime lint.
     prefix = 'uv run godotter runtime lint --project . '
