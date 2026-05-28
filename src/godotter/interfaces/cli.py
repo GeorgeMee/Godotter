@@ -912,6 +912,11 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
     prefix = 'uv run godotter runtime lint --project . '
     if raw.startswith(prefix):
         path = raw[len(prefix) :].strip().strip('"').strip("'")
+        if path.startswith('--path '):
+            cleaned = path[len('--path ') :].strip().strip('"').strip("'")
+            if cleaned:
+                return f'{prefix}{cleaned}'
+            return 'uv run godotter runtime lint --project .'
         if path and ("/" not in path and "\\" not in path):
             candidate = workspace_root / path
             if not candidate.exists():
@@ -1123,10 +1128,11 @@ def runtime_run_command(
     scene: str | None = typer.Option(None, '--scene', help='Scene file path to run (runs main scene if omitted).'),
     timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for the run operation.'),
     project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    headless: bool = typer.Option(False, '--headless', help='Run with Godot --headless (recommended for CI/tests).'),
 ) -> None:
     settings = get_settings()
     runner = build_runner(settings, project=project)
-    result = runner.run_project(timeout=timeout, scene=scene)
+    result = runner.run_project(timeout=timeout, scene=scene, headless=headless)
     typer.echo(format_runtime_result('headless_run', scene or '(project)', result))
     if result.exit_code != 0 or result.timed_out:
         raise typer.Exit(1)
@@ -1134,6 +1140,11 @@ def runtime_run_command(
 
 @runtime_app.command('test', help='Run headless test scenes under tests/ (auto-discovers harness scenes).')
 def runtime_test_command(
+    scene: str | None = typer.Option(
+        None,
+        '--scene',
+        help='Run a single test scene (res://... or workspace-relative path). Overrides --pattern.',
+    ),
     pattern: str = typer.Option(
         '*_harness.tscn;*_smoke.tscn',
         '--pattern',
@@ -1160,7 +1171,23 @@ def runtime_test_command(
         typer.echo('count=0')
         return
 
-    patterns = [p.strip() for p in pattern.split(';') if p.strip()]
+    if scene:
+        raw = scene.strip().strip('"').strip("'")
+        if raw.startswith('res://'):
+            scene_res = raw
+        else:
+            rel = raw.lstrip('/').lstrip('\\')
+            scene_res = f"res://{rel.replace('\\\\', '/')}"
+        result = runner.run_project(timeout=timeout, scene=scene_res, headless=True)
+        typer.echo(format_runtime_result('headless_run', scene_res, result))
+        stderr_text = result.stderr or ''
+        bad_markers = [m for m in (x.strip() for x in fail_on_stderr.split(';')) if m]
+        marker_hit = any(m in stderr_text for m in bad_markers)
+        if result.exit_code != 0 or result.timed_out or marker_hit:
+            raise typer.Exit(1)
+        return
+
+    patterns = [p.strip().strip('"').strip("'") for p in pattern.split(';') if p.strip()]
     scenes: list[Path] = []
     for pat in patterns:
         scenes.extend(tests_root.rglob(pat))
@@ -1186,7 +1213,7 @@ def runtime_test_command(
     for scene_path in unique:
         rel = scene_path.relative_to(runner.workspace_root).as_posix()
         scene_res = f'res://{rel}'
-        result = runner.run_project(timeout=timeout, scene=scene_res)
+        result = runner.run_project(timeout=timeout, scene=scene_res, headless=True)
         typer.echo(format_runtime_result('headless_run', scene_res, result))
         stderr_text = result.stderr or ''
         marker_hit = any(m in stderr_text for m in bad_markers)

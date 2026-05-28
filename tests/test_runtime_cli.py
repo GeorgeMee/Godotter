@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -25,8 +25,8 @@ class FakeGodotRunner:
     def lint_project(self, timeout: int = 60):
         return FakeRunResult(f'lint-project:{timeout}')
 
-    def run_project(self, timeout: int = 60, scene: str | None = None):
-        return FakeRunResult(f'run:{scene or "(project)"}:{timeout}')
+    def run_project(self, timeout: int = 60, scene: str | None = None, *, headless: bool = False):
+        return FakeRunResult(f'run:{scene or "(project)"}:{timeout}:headless={str(headless).lower()}')
 
 
 class FakeDoctorReport:
@@ -91,7 +91,7 @@ def test_runtime_run_command(monkeypatch, tmp_path):
     result = runner.invoke(app, ['runtime', 'run', '--scene', 'res://scenes/main.tscn', '--timeout', '11'])
     assert result.exit_code == 0
     assert 'command=headless_run' in result.stdout
-    assert 'stdout=run:res://scenes/main.tscn:11' in result.stdout
+    assert 'stdout=run:res://scenes/main.tscn:11:headless=false' in result.stdout
 
 
 def test_runtime_command_requires_godot_path(monkeypatch, tmp_path):

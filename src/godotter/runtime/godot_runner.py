@@ -26,8 +26,16 @@ class GodotRunner:
     def lint_project(self, timeout: int = 60) -> GodotRunResult:
         return self._run(['--quit'], timeout=timeout)
 
-    def run_project(self, timeout: int = 60, scene: str | None = None) -> GodotRunResult:
+    def run_project(
+        self,
+        timeout: int = 60,
+        scene: str | None = None,
+        *,
+        headless: bool = False,
+    ) -> GodotRunResult:
         args: list[str] = []
+        if headless:
+            args.append('--headless')
         if scene:
             args.extend(['--scene', scene])
         return self._run(args, timeout=timeout)
