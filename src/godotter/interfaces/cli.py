@@ -903,6 +903,10 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
         return 'uv run godotter runtime lint --project .'
     if raw == 'uv run godotter runtime lint --project . all':
         return 'uv run godotter runtime lint --project .'
+    if raw == 'uv run godotter runtime lint --project . warnings':
+        return 'uv run godotter runtime lint --project .'
+    if raw == 'uv run godotter runtime lint --project . clean':
+        return 'uv run godotter runtime lint --project .'
 
     # Fix common case: planner uses bare filename for runtime lint.
     prefix = 'uv run godotter runtime lint --project . '
@@ -1125,6 +1129,74 @@ def runtime_run_command(
     result = runner.run_project(timeout=timeout, scene=scene)
     typer.echo(format_runtime_result('headless_run', scene or '(project)', result))
     if result.exit_code != 0 or result.timed_out:
+        raise typer.Exit(1)
+
+
+@runtime_app.command('test', help='Run headless test scenes under tests/ (auto-discovers harness scenes).')
+def runtime_test_command(
+    pattern: str = typer.Option(
+        '*_harness.tscn;*_smoke.tscn',
+        '--pattern',
+        help='Semicolon-separated glob patterns to match test scenes under tests/.',
+    ),
+    timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for each test scene.'),
+    project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    include_core_harness: bool = typer.Option(
+        False,
+        '--include-core-harness',
+        help='Include tests/core/test_harness.tscn (normally skipped; often not auto-quit).',
+    ),
+    fail_on_stderr: str = typer.Option(
+        'SCRIPT ERROR:;FAIL:',
+        '--fail-on-stderr',
+        help='Semicolon-separated substrings; if any appears in stderr, mark test as failed.',
+    ),
+) -> None:
+    settings = get_settings()
+    runner = build_runner(settings, project=project)
+    tests_root = runner.workspace_root / 'tests'
+    if not tests_root.exists():
+        typer.echo(f'tests_root={tests_root.as_posix()}')
+        typer.echo('count=0')
+        return
+
+    patterns = [p.strip() for p in pattern.split(';') if p.strip()]
+    scenes: list[Path] = []
+    for pat in patterns:
+        scenes.extend(tests_root.rglob(pat))
+
+    # Stable order, unique.
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for p in sorted(scenes, key=lambda x: x.as_posix()):
+        if p in seen or not p.is_file():
+            continue
+        if not include_core_harness and p.name == 'test_harness.tscn' and 'tests/core/' in p.as_posix().replace('\\', '/'):
+            continue
+        seen.add(p)
+        unique.append(p)
+
+    typer.echo(f'tests_root={tests_root.as_posix()}')
+    typer.echo(f'count={len(unique)}')
+    if not unique:
+        return
+
+    failures: list[str] = []
+    bad_markers = [m for m in (x.strip() for x in fail_on_stderr.split(';')) if m]
+    for scene_path in unique:
+        rel = scene_path.relative_to(runner.workspace_root).as_posix()
+        scene_res = f'res://{rel}'
+        result = runner.run_project(timeout=timeout, scene=scene_res)
+        typer.echo(format_runtime_result('headless_run', scene_res, result))
+        stderr_text = result.stderr or ''
+        marker_hit = any(m in stderr_text for m in bad_markers)
+        if result.exit_code != 0 or result.timed_out or marker_hit:
+            failures.append(scene_res)
+
+    if failures:
+        typer.echo(f'failures={len(failures)}')
+        for s in failures[:25]:
+            typer.echo(f'failure={s}')
         raise typer.Exit(1)
 
 
