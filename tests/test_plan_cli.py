@@ -121,7 +121,19 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
 
     calls: list[str] = []
 
-    def _fake_task_run_command(*, workpack, latest, workspace, mode, brain, allow_no_changes=False, strict_audit=True):
+    def _fake_task_run_command(
+        *,
+        workpack,
+        latest,
+        workspace,
+        mode,
+        brain,
+        allow_no_changes=False,
+        strict_audit=True,
+        max_attempts=1,
+        stop_on_same_failure=True,
+        same_failure_limit=2,
+    ):
         calls.append(str(workpack))
 
     monkeypatch.setattr('godotter.interfaces.cli.task_run_command', _fake_task_run_command)

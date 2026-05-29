@@ -148,10 +148,26 @@ class OpenAICompatibleBrain(Brain):
     def _parse_tool_call(self, tool_call: dict[str, Any]) -> ToolCall:
         function = tool_call['function']
         arguments = function.get('arguments') or '{}'
+        parsed_args: dict[str, Any]
+        if isinstance(arguments, dict):
+            parsed_args = arguments
+        else:
+            raw = str(arguments)
+            try:
+                parsed_args = json.loads(raw)
+            except json.JSONDecodeError:
+                # Some OpenAI-compatible providers occasionally return tool-call
+                # arguments that contain unescaped control characters. Best-effort
+                # sanitize and retry instead of crashing the whole run.
+                cleaned = ''.join(ch for ch in raw if (ord(ch) >= 32) or ch in '\r\n\t')
+                try:
+                    parsed_args = json.loads(cleaned)
+                except Exception:
+                    parsed_args = {}
         return ToolCall(
             id=tool_call['id'],
             name=function['name'],
-            args=json.loads(arguments),
+            args=parsed_args,
         )
 
     def _format_http_error(self, response: requests.Response | None) -> str:

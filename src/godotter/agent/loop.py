@@ -84,6 +84,10 @@ class Agent:
                         'content': result,
                     }
                 )
+                # If the model is using tool-calls-only (empty text), surface tool
+                # results to the caller so CLI users still see progress/errors.
+                if not thought.text and result:
+                    output_parts.append(result)
         return '\n\n'.join(part for part in output_parts if part)
 
     def _assistant_message(self, thought: Thought) -> dict[str, Any]:

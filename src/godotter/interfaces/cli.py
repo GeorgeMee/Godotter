@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import hashlib
 import secrets
 import subprocess
 import json
@@ -26,6 +27,7 @@ from godotter.operations import (
     normalize_provider_name,
     render_project_scaffold_summary,
     resolve_runtime_target,
+    scaffold_scene_with_script,
     scaffold_godot_project,
     set_default_provider,
     set_model_for_provider,
@@ -72,6 +74,7 @@ runtime_app = typer.Typer(help='Godot runtime operations (run, lint, diagnose, f
 project_app = typer.Typer(help='Manage Godot projects and scaffolding.')
 task_app = typer.Typer(help='Prepare and run workpacks for agent tasks.')
 plan_app = typer.Typer(help='Prepare and run multi-step plans (PlanPacks).')
+scene_app = typer.Typer(help='Create scenes and paired scripts (tscn + gd).')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
@@ -80,6 +83,7 @@ app.add_typer(runtime_app, name='runtime')
 app.add_typer(project_app, name='project')
 app.add_typer(task_app, name='task')
 app.add_typer(plan_app, name='plan')
+app.add_typer(scene_app, name='scene')
 
 
 @app.callback()
@@ -147,7 +151,8 @@ def task_prepare_command(
         verification=[
             'uv run godotter runtime validate-structure',
             'uv run godotter runtime validate-managers',
-            'uv run pytest -q',
+            'uv run godotter runtime lint --project .',
+            'uv run godotter runtime test --project . --pattern "*_smoke.tscn;*_harness.tscn" --timeout 30',
         ],
     )
     out_path = write_workpack(root, pack)
@@ -198,7 +203,8 @@ def task_scout_command(
         verification=[
             'uv run godotter runtime validate-structure',
             'uv run godotter runtime validate-managers',
-            'uv run pytest -q',
+            'uv run godotter runtime lint --project .',
+            'uv run godotter runtime test --project . --pattern "*_smoke.tscn;*_harness.tscn" --timeout 30',
         ],
     )
     out_path = write_workpack(root, pack)
@@ -236,6 +242,23 @@ def task_run_command(
         True,
         '--strict-audit/--no-strict-audit',
         help='Fail fast on audit violations (default: strict). Plan runs may disable strict audit and rely on final verification.',
+    ),
+    max_attempts: int = typer.Option(
+        1,
+        '--max-attempts',
+        min=1,
+        help='Max agent attempts for this WorkPack when verification fails (act mode only).',
+    ),
+    stop_on_same_failure: bool = typer.Option(
+        True,
+        '--stop-on-same-failure/--no-stop-on-same-failure',
+        help='Stop early if the same verification failure repeats (act mode only).',
+    ),
+    same_failure_limit: int = typer.Option(
+        2,
+        '--same-failure-limit',
+        min=1,
+        help='How many times the same failure may repeat before stopping early (act mode only).',
     ),
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this run.'),
 ) -> None:
@@ -303,20 +326,65 @@ def task_run_command(
         if not baseline_path.exists():
             write_task_run_baseline(settings.workspace_root.resolve())
 
-    agent_output = agent.handle_input('\n'.join(prompt_lines))
-    typer.echo(agent_output)
-    if normalized_mode == 'act':
+    last_signature: str | None = None
+    same_failure_count = 0
+    failure_report: str | None = None
+
+    attempts = max_attempts if normalized_mode == 'act' else 1
+    for attempt in range(1, attempts + 1):
+        attempt_prompt = list(prompt_lines)
+        if failure_report:
+            attempt_prompt.extend(
+                [
+                    '',
+                    f'Previous attempt failed (attempt={attempt - 1}). Fix the failure and re-run verification.',
+                    'Failure summary:',
+                    failure_report,
+                ]
+            )
+
+        agent_output = agent.handle_input('\n'.join(attempt_prompt))
+        typer.echo(agent_output)
+        if normalized_mode != 'act':
+            return
+
         _maybe_apply_unified_diff(settings.workspace_root.resolve(), agent_output)
+
         try:
             _audit_task_run_changes(
                 settings.workspace_root.resolve(),
                 allow_no_changes=allow_no_changes,
                 strict=strict_audit,
             )
-        except typer.Exit:
+        except typer.Exit as exc:
             _dump_task_debug(agent)
-            raise
-        _run_task_verification_commands(settings.workspace_root.resolve(), pack.verification)
+            failure_report = f'audit_failed={type(exc).__name__}'
+            signature = hashlib.sha256(failure_report.encode('utf-8', errors='replace')).hexdigest()
+            if stop_on_same_failure and signature == last_signature:
+                same_failure_count += 1
+            else:
+                same_failure_count = 1
+                last_signature = signature
+            if stop_on_same_failure and same_failure_count >= same_failure_limit:
+                raise
+            if attempt >= attempts:
+                raise
+            continue
+
+        ok, failure_report, signature = _run_task_verification_commands(settings.workspace_root.resolve(), pack.verification)
+        if ok:
+            return
+
+        if stop_on_same_failure and signature == last_signature:
+            same_failure_count += 1
+        else:
+            same_failure_count = 1
+            last_signature = signature
+        if stop_on_same_failure and same_failure_count >= same_failure_limit:
+            typer.echo('task_run_retry_stop_reason=same_failure_repeated')
+            raise typer.Exit(1)
+        if attempt >= attempts:
+            raise typer.Exit(1)
 
 
 @task_app.command('list', help='List WorkPacks under .godotter/workpacks/.')
@@ -415,6 +483,11 @@ def plan_prepare_command(
         mode='plan',
         brain_name=selected_brain,
     )
+    # PlanPack generation must be a pure text/JSON response. Some providers may
+    # otherwise emit tool-calls-only (empty text), which breaks JSON parsing.
+    agent.brain.tools = []
+    if hasattr(agent.brain, 'tool_choice'):
+        setattr(agent.brain, 'tool_choice', 'none')
 
     scout = scout_workspace(root, goal, max_files=40)
     constraints = [
@@ -425,8 +498,8 @@ def plan_prepare_command(
     ]
     prompt = '\n'.join(
         [
-            'Create a multi-step implementation plan as JSON.',
-            'Output must be a JSON object with keys: tasks (array).',
+            'Create a multi-step implementation plan as JSON ONLY (no markdown, no backticks, no commentary).',
+            'Output must be a single JSON object with keys: tasks (array).',
             'Each task must have: title, goal, scope (array of path prefixes), acceptance (array), verification (array), depends_on (array).',
             'Keep tasks small (5-10 tasks).',
             '',
@@ -632,6 +705,23 @@ def plan_run_command(
     only_task: str | None = typer.Option(None, '--only', help='Run only this task id (ignores --from).'),
     rerun_passed: bool = typer.Option(False, '--rerun-passed', help='Re-run tasks already marked pass in state.'),
     continue_on_fail: bool = typer.Option(False, '--continue-on-fail', help='Continue running later tasks after a failure.'),
+    max_attempts: int = typer.Option(
+        3,
+        '--max-attempts',
+        min=1,
+        help='Max agent attempts per task when verification fails.',
+    ),
+    stop_on_same_failure: bool = typer.Option(
+        True,
+        '--stop-on-same-failure/--no-stop-on-same-failure',
+        help='Stop early if the same failure repeats across retries.',
+    ),
+    same_failure_limit: int = typer.Option(
+        2,
+        '--same-failure-limit',
+        min=1,
+        help='How many times the same failure may repeat before stopping early.',
+    ),
     brain: str | None = typer.Option(None, '--brain', help='Override default brain/provider for execution.'),
 ) -> None:
     base_settings = get_settings()
@@ -738,6 +828,9 @@ def plan_run_command(
                 brain=selected_brain,
                 allow_no_changes=True,
                 strict_audit=False,
+                max_attempts=max_attempts,
+                stop_on_same_failure=stop_on_same_failure,
+                same_failure_limit=same_failure_limit,
             )
         except Exception as exc:
             state.task_status[task.id] = 'fail'
@@ -765,6 +858,44 @@ def project_new_command(
         typer.echo(f'Error: {exc}')
         raise typer.Exit(1) from exc
     typer.echo(render_project_scaffold_summary(result, no_git=no_git))
+
+
+@scene_app.command('new', help='Create a scene (.tscn) and paired script (.gd) together.')
+def scene_new_command(
+    path: str = typer.Argument(..., help='Scene path (res://... or workspace-relative), must end with .tscn.'),
+    kind: str = typer.Option('level', '--kind', help='Scene kind: level, ui, prefab.'),
+    script_path: str | None = typer.Option(
+        None,
+        '--script',
+        help='Optional script path (res://... or workspace-relative), must end with .gd. Defaults to same stem next to the scene.',
+    ),
+    root_type: str | None = typer.Option(None, '--root-type', help='Override root node type (default depends on --kind).'),
+    root_name: str | None = typer.Option(None, '--root-name', help='Override root node name (default inferred from filename).'),
+    force: bool = typer.Option(False, '--force', help='Overwrite existing files if they already exist.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    try:
+        result = scaffold_scene_with_script(
+            workspace_root=root,
+            kind=kind,
+            scene_path=path,
+            script_path=script_path,
+            root_type=root_type,
+            root_name=root_name,
+            force=force,
+        )
+    except ValueError as exc:
+        typer.echo(f'Error: {exc}')
+        raise typer.Exit(1) from exc
+    typer.echo(f'scene={result.scene_path.relative_to(root).as_posix()}')
+    typer.echo(f'script={result.script_path.relative_to(root).as_posix()}')
+    typer.echo(f'uid={result.uid}')
 
 
 @app.command('new', hidden=True)
@@ -861,7 +992,12 @@ def _audit_task_run_changes(
         typer.echo('task_run_audit_warn=missing_level_updates_for_game_logic_changes')
 
 
-def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -> None:
+def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -> tuple[bool, str | None, str]:
+    """
+    Returns (ok, failure_report, signature). Prints per-command output.
+    signature is a stable hash of the first failing command's results so callers
+    can detect repeated failures across retries.
+    """
     for command in commands:
         command = _rewrite_verification_command(workspace_root, command)
         typer.echo(f'task_run_verify command={command}')
@@ -881,7 +1017,9 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
             typer.echo('task_run_verify exit_code=-1 timed_out=true')
             typer.echo(f'task_run_verify_stdout={stdout}')
             typer.echo(f'task_run_verify_stderr={stderr}')
-            raise typer.Exit(1) from exc
+            failure = f'verify_timeout command={command}\nstdout={stdout}\nstderr={stderr}'
+            signature = hashlib.sha256(failure.encode('utf-8', errors='replace')).hexdigest()
+            return False, failure, signature
 
         out_b = completed.stdout or b''
         err_b = completed.stderr or b''
@@ -891,7 +1029,12 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
         typer.echo(f'task_run_verify_stdout={stdout}')
         typer.echo(f'task_run_verify_stderr={stderr}')
         if completed.returncode != 0:
-            raise typer.Exit(1)
+            failure = f'verify_failed command={command} exit_code={completed.returncode}\nstdout={stdout}\nstderr={stderr}'
+            signature = hashlib.sha256(failure.encode('utf-8', errors='replace')).hexdigest()
+            return False, failure, signature
+
+    signature = hashlib.sha256(b'OK').hexdigest()
+    return True, None, signature
 
 
 def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
@@ -1114,6 +1257,11 @@ def runtime_lint_command(
     path: str | None = typer.Argument(None, help='Path to a specific script file (lints entire project if omitted).'),
     timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for the lint operation.'),
     project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    fail_on_stderr: str = typer.Option(
+        'SCRIPT ERROR:;Parse Error:;ERROR:',
+        '--fail-on-stderr',
+        help='Semicolon-separated substrings; if any appears in stderr, mark lint as failed.',
+    ),
 ) -> None:
     settings = get_settings()
     runner = build_runner(settings, project=project)
@@ -1124,7 +1272,10 @@ def runtime_lint_command(
         result = runner.lint_project(timeout=timeout)
         target = '(project)'
     typer.echo(format_runtime_result('script_lint', target, result))
-    if result.exit_code != 0:
+    stderr_text = result.stderr or ''
+    bad_markers = [m for m in (x.strip() for x in fail_on_stderr.split(';')) if m]
+    marker_hit = any(m in stderr_text for m in bad_markers)
+    if result.exit_code != 0 or result.timed_out or marker_hit:
         raise typer.Exit(1)
 
 
