@@ -871,6 +871,11 @@ def scene_new_command(
         '--script',
         help='Optional script path (res://... or workspace-relative), must end with .gd. Defaults to same stem next to the scene.',
     ),
+    layout: str = typer.Option(
+        'split',
+        '--layout',
+        help='Default script layout when --script is not provided: split or colocated.',
+    ),
     root_type: str | None = typer.Option(None, '--root-type', help='Override root node type (default depends on --kind).'),
     root_name: str | None = typer.Option(None, '--root-name', help='Override root node name (default inferred from filename).'),
     force: bool = typer.Option(False, '--force', help='Overwrite existing files if they already exist.'),
@@ -905,6 +910,7 @@ def scene_new_command(
             script_path=script_path,
             root_type=root_type,
             root_name=root_name,
+            layout=layout,
             force=force,
         )
     except ValueError as exc:

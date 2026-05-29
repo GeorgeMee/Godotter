@@ -17,7 +17,7 @@ def test_scene_new_creates_level_scene_and_script(monkeypatch, tmp_path):
     result = runner.invoke(app, ['scene', 'new', 'game/levels/menu.tscn', '--kind', 'level', '--workspace', '.'])
     assert result.exit_code == 0
     assert (tmp_path / 'game' / 'levels' / 'menu.tscn').exists()
-    assert (tmp_path / 'game' / 'levels' / 'menu.gd').exists()
+    assert (tmp_path / 'game' / 'scripts' / 'menu.gd').exists()
 
     scene_text = (tmp_path / 'game' / 'levels' / 'menu.tscn').read_text(encoding='utf-8')
     assert 'uid="uid://' in scene_text
@@ -25,18 +25,18 @@ def test_scene_new_creates_level_scene_and_script(monkeypatch, tmp_path):
     assert '[node name="EventBus" type="Node" parent="Managers"]' in scene_text
     assert 'script = ExtResource("1_script")' in scene_text
 
-    script_text = (tmp_path / 'game' / 'levels' / 'menu.gd').read_text(encoding='utf-8')
+    script_text = (tmp_path / 'game' / 'scripts' / 'menu.gd').read_text(encoding='utf-8')
     assert script_text.startswith('extends Node\n')
 
 
 def test_scene_new_creates_ui_scene_and_script(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ['scene', 'new', 'game/ui/scenes/main_menu.tscn', '--kind', 'ui', '--workspace', '.'])
+    result = runner.invoke(app, ['scene', 'new', 'ui/views/main_menu.tscn', '--kind', 'ui', '--workspace', '.'])
     assert result.exit_code == 0
-    assert (tmp_path / 'game' / 'ui' / 'scenes' / 'main_menu.tscn').exists()
-    assert (tmp_path / 'game' / 'ui' / 'scenes' / 'main_menu.gd').exists()
+    assert (tmp_path / 'ui' / 'views' / 'main_menu.tscn').exists()
+    assert (tmp_path / 'ui' / 'scripts' / 'main_menu.gd').exists()
 
-    script_text = (tmp_path / 'game' / 'ui' / 'scenes' / 'main_menu.gd').read_text(encoding='utf-8')
+    script_text = (tmp_path / 'ui' / 'scripts' / 'main_menu.gd').read_text(encoding='utf-8')
     assert script_text.startswith('extends Control\n')
 
 

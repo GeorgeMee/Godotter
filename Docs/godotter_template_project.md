@@ -13,7 +13,7 @@ Godotter 仓库内置模板目录：
 
 顶层三目录同级：
 - `game/`：游戏逻辑与内容（core/systems/features/content/levels）
-- `ui/`：表现层 UI（scenes/scripts/themes 等）
+- `ui/`：表现层 UI（views/scripts/themes 等）
 - `tests/`：测试与 harness（levels/systems/features/core）
 
 依赖方向建议固定为：
@@ -34,4 +34,3 @@ Godotter 仓库内置模板目录：
   - `res://game/systems/<name>/scripts/`
   - `res://game/features/<name>/scripts/`
   - 单元测试放到：`res://tests/systems/<name>/` / `res://tests/features/<name>/`
-

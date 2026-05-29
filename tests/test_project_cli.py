@@ -21,6 +21,7 @@ def test_project_new_command_creates_scaffold(monkeypatch, tmp_path):
     assert (project_root / 'game' / 'features').is_dir()
     assert (project_root / 'game' / 'content' / 'prefabs').is_dir()
     assert (project_root / 'ui').is_dir()
+    assert (project_root / 'ui' / 'views').is_dir()
     assert (project_root / 'tests' / 'core').is_dir()
 
     project_text = (project_root / 'project.godot').read_text(encoding='utf-8')

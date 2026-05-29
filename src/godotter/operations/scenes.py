@@ -20,6 +20,52 @@ class SceneOnlyScaffoldResult:
     uid: str
 
 
+def _resolve_script_path_from_scene(
+    workspace_root: Path,
+    resolved_scene: Path,
+    *,
+    layout: str,
+) -> Path:
+    """
+    Map a scene path to its default script path.
+
+    layout:
+      - colocated: <dir>/<name>.tscn -> <dir>/<name>.gd
+      - split: follow Godotter conventions:
+          ui/views/<x>.tscn            -> ui/scripts/<x>.gd
+          game/levels/<x>.tscn         -> game/scripts/<x>.gd
+          game/content/prefabs/<x>.tscn -> game/content/scripts/<x>.gd
+        Otherwise falls back to colocated.
+    """
+    layout_norm = (layout or '').strip().lower()
+    if layout_norm == 'colocated':
+        return resolved_scene.with_suffix('.gd')
+    if layout_norm != 'split':
+        raise ValueError(f'Unsupported layout: {layout}')
+
+    rel = resolved_scene.relative_to(workspace_root)
+    parts = list(rel.parts)
+    if len(parts) < 2:
+        return resolved_scene.with_suffix('.gd')
+
+    # ui/views -> ui/scripts
+    if parts[0] == 'ui' and len(parts) >= 3 and parts[1] == 'views':
+        target_parts = ['ui', 'scripts', *parts[2:]]
+        return (workspace_root / Path(*target_parts)).with_suffix('.gd').resolve()
+
+    # game/levels -> game/scripts
+    if parts[0] == 'game' and len(parts) >= 3 and parts[1] == 'levels':
+        target_parts = ['game', 'scripts', *parts[2:]]
+        return (workspace_root / Path(*target_parts)).with_suffix('.gd').resolve()
+
+    # game/content/prefabs -> game/content/scripts
+    if parts[0] == 'game' and len(parts) >= 4 and parts[1] == 'content' and parts[2] == 'prefabs':
+        target_parts = ['game', 'content', 'scripts', *parts[3:]]
+        return (workspace_root / Path(*target_parts)).with_suffix('.gd').resolve()
+
+    return resolved_scene.with_suffix('.gd')
+
+
 def _resolve_scene_path(workspace_root: Path, raw: str) -> Path:
     text = (raw or '').strip().strip('"').strip("'")
     if text.startswith('res://'):
@@ -123,6 +169,7 @@ def scaffold_scene_with_script(
     script_path: str | None = None,
     root_type: str | None = None,
     root_name: str | None = None,
+    layout: str = 'split',
     force: bool = False,
 ) -> SceneScaffoldResult:
     resolved_scene = _resolve_scene_path(workspace_root, scene_path)
@@ -138,7 +185,7 @@ def scaffold_scene_with_script(
             raise ValueError('script path must end with .gd')
         resolved_script = (workspace_root / raw).resolve()
     else:
-        resolved_script = resolved_scene.with_suffix('.gd')
+        resolved_script = _resolve_script_path_from_scene(workspace_root, resolved_scene, layout=layout)
 
     if resolved_script.exists() and not force:
         raise ValueError(f'File already exists: {resolved_script.relative_to(workspace_root).as_posix()}')
