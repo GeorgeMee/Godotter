@@ -27,6 +27,7 @@ from godotter.operations import (
     normalize_provider_name,
     render_project_scaffold_summary,
     resolve_runtime_target,
+    scaffold_scene_only,
     scaffold_scene_with_script,
     scaffold_godot_project,
     set_default_provider,
@@ -864,6 +865,7 @@ def project_new_command(
 def scene_new_command(
     path: str = typer.Argument(..., help='Scene path (res://... or workspace-relative), must end with .tscn.'),
     kind: str = typer.Option('level', '--kind', help='Scene kind: level, ui, prefab.'),
+    no_script: bool = typer.Option(False, '--no-script', help='Do not generate a .gd script (scene only).'),
     script_path: str | None = typer.Option(
         None,
         '--script',
@@ -881,6 +883,21 @@ def scene_new_command(
     settings = get_settings()
     root = (workspace or settings.workspace_root).resolve()
     try:
+        if no_script:
+            if script_path:
+                raise ValueError('--no-script cannot be used together with --script')
+            result_only = scaffold_scene_only(
+                workspace_root=root,
+                kind=kind,
+                scene_path=path,
+                root_type=root_type,
+                root_name=root_name,
+                force=force,
+            )
+            typer.echo(f'scene={result_only.scene_path.relative_to(root).as_posix()}')
+            typer.echo('script=(none)')
+            typer.echo(f'uid={result_only.uid}')
+            return
         result = scaffold_scene_with_script(
             workspace_root=root,
             kind=kind,
@@ -895,6 +912,38 @@ def scene_new_command(
         raise typer.Exit(1) from exc
     typer.echo(f'scene={result.scene_path.relative_to(root).as_posix()}')
     typer.echo(f'script={result.script_path.relative_to(root).as_posix()}')
+    typer.echo(f'uid={result.uid}')
+
+
+@scene_app.command('create', help='Create a scene (.tscn) only (no script).')
+def scene_create_command(
+    path: str = typer.Argument(..., help='Scene path (res://... or workspace-relative), must end with .tscn.'),
+    kind: str = typer.Option('level', '--kind', help='Scene kind: level, ui, prefab.'),
+    root_type: str | None = typer.Option(None, '--root-type', help='Override root node type (default depends on --kind).'),
+    root_name: str | None = typer.Option(None, '--root-name', help='Override root node name (default inferred from filename).'),
+    force: bool = typer.Option(False, '--force', help='Overwrite existing file if it already exists.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    try:
+        result = scaffold_scene_only(
+            workspace_root=root,
+            kind=kind,
+            scene_path=path,
+            root_type=root_type,
+            root_name=root_name,
+            force=force,
+        )
+    except ValueError as exc:
+        typer.echo(f'Error: {exc}')
+        raise typer.Exit(1) from exc
+    typer.echo(f'scene={result.scene_path.relative_to(root).as_posix()}')
+    typer.echo('script=(none)')
     typer.echo(f'uid={result.uid}')
 
 

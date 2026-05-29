@@ -1,5 +1,10 @@
 from godotter.operations.projects import render_project_scaffold_summary, scaffold_godot_project
-from godotter.operations.scenes import SceneScaffoldResult, scaffold_scene_with_script
+from godotter.operations.scenes import (
+    SceneOnlyScaffoldResult,
+    SceneScaffoldResult,
+    scaffold_scene_only,
+    scaffold_scene_with_script,
+)
 from godotter.operations.providers import (
     check_provider_connectivity,
     fetch_model_rows,
@@ -31,7 +36,9 @@ __all__ = [
     'render_project_scaffold_summary',
     'resolve_runtime_target',
     'scaffold_godot_project',
+    'SceneOnlyScaffoldResult',
     'SceneScaffoldResult',
+    'scaffold_scene_only',
     'scaffold_scene_with_script',
     'set_default_provider',
     'set_model_for_provider',

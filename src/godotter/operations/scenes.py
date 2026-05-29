@@ -14,6 +14,12 @@ class SceneScaffoldResult:
     uid: str
 
 
+@dataclass(slots=True)
+class SceneOnlyScaffoldResult:
+    scene_path: Path
+    uid: str
+
+
 def _resolve_scene_path(workspace_root: Path, raw: str) -> Path:
     text = (raw or '').strip().strip('"').strip("'")
     if text.startswith('res://'):
@@ -66,6 +72,44 @@ def _generate_level_scene(
             '',
             '[node name="EventBus" type="Node" parent="Managers"]',
             'script = ExtResource("3_event_bus")',
+            '',
+        ]
+    )
+
+
+def _generate_minimal_scene_no_script(*, uid: str, root_name: str, root_type: str) -> str:
+    return '\n'.join(
+        [
+            f'[gd_scene format=3 uid="{uid}"]',
+            '',
+            f'[node name="{root_name}" type="{root_type}"]',
+            '',
+        ]
+    )
+
+
+def _generate_level_scene_no_script(
+    *,
+    uid: str,
+    root_name: str,
+    root_type: str,
+    managers_res_path: str = 'res://game/core/bootstrap/managers.gd',
+    event_bus_res_path: str = 'res://game/core/events/event_bus.gd',
+) -> str:
+    return '\n'.join(
+        [
+            f'[gd_scene load_steps=2 format=3 uid="{uid}"]',
+            '',
+            f'[ext_resource type="Script" path="{managers_res_path}" id="1_managers"]',
+            f'[ext_resource type="Script" path="{event_bus_res_path}" id="2_event_bus"]',
+            '',
+            f'[node name="{root_name}" type="{root_type}"]',
+            '',
+            '[node name="Managers" type="Node" parent="."]',
+            'script = ExtResource("1_managers")',
+            '',
+            '[node name="EventBus" type="Node" parent="Managers"]',
+            'script = ExtResource("2_event_bus")',
             '',
         ]
     )
@@ -145,3 +189,38 @@ def scaffold_scene_with_script(
 
     return SceneScaffoldResult(scene_path=resolved_scene, script_path=resolved_script, uid=uid)
 
+
+def scaffold_scene_only(
+    *,
+    workspace_root: Path,
+    kind: str,
+    scene_path: str,
+    root_type: str | None = None,
+    root_name: str | None = None,
+    force: bool = False,
+) -> SceneOnlyScaffoldResult:
+    resolved_scene = _resolve_scene_path(workspace_root, scene_path)
+    if resolved_scene.exists() and not force:
+        raise ValueError(f'File already exists: {resolved_scene.relative_to(workspace_root).as_posix()}')
+
+    kind_norm = (kind or '').strip().lower()
+    if kind_norm not in {'level', 'ui', 'prefab'}:
+        raise ValueError(f'Unsupported kind: {kind}')
+
+    if kind_norm == 'level':
+        default_root_type = 'Node'
+    elif kind_norm == 'ui':
+        default_root_type = 'Control'
+    else:
+        default_root_type = 'Node2D'
+
+    chosen_root_type = root_type or default_root_type
+    chosen_root_name = root_name or filename_to_node_name(resolved_scene.name)
+    uid = generate_uid()
+
+    if kind_norm == 'level':
+        scene_text = _generate_level_scene_no_script(uid=uid, root_name=chosen_root_name, root_type=chosen_root_type)
+    else:
+        scene_text = _generate_minimal_scene_no_script(uid=uid, root_name=chosen_root_name, root_type=chosen_root_type)
+    write_text_utf8(resolved_scene, scene_text)
+    return SceneOnlyScaffoldResult(scene_path=resolved_scene, uid=uid)
