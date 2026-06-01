@@ -6,6 +6,10 @@
 
 在 Godotter 仓库根目录执行：
 - `bash bin/run_web.sh`
+停止：
+- `bash bin/stop_web.sh`
+重启：
+- `bash bin/restart_web.sh`
 
 默认监听：`127.0.0.1:9898`（可通过环境变量覆盖）
 - `GODOTTER_WEB_PORT=9898`
