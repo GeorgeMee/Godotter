@@ -21,3 +21,10 @@
 
 健康检查：
 - `http://127.0.0.1:9898/health`
+
+## 编辑 `.env`
+
+打开：
+- `http://127.0.0.1:9898/env`
+
+可选：设置环境变量 `GODOTTER_WEB_TOKEN` 后，请求必须带 Header：`x-godotter-token: <token>`
