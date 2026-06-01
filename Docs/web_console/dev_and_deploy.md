@@ -5,7 +5,7 @@
 ## 服务器启动（Linux）
 
 在 Godotter 仓库根目录执行：
-- `bash scripts/run_web.sh`
+- `bash bin/run_web.sh`
 
 默认监听：`127.0.0.1:9898`（可通过环境变量覆盖）
 - `GODOTTER_WEB_PORT=9898`
@@ -21,4 +21,3 @@
 
 健康检查：
 - `http://127.0.0.1:9898/health`
-
