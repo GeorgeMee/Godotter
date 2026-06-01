@@ -6,8 +6,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-Set-Location (Split-Path -Parent $PSCommandPath)\\..
+$repoRoot = Resolve-Path (Join-Path (Split-Path -Parent $PSCommandPath) '..')
+Set-Location $repoRoot
 
 Write-Host "Starting Godotter Web Console on http://$HostAddr`:$Port"
 uv run --extra web uvicorn godotter_web.app:app --host $HostAddr --port $Port
-
