@@ -37,7 +37,7 @@ def test_plan_prepare_list_show_status(monkeypatch, tmp_path):
                         'depends_on': [],
                         'scope': ['game/systems/a/'],
                         'acceptance': ['A done'],
-                        'verification': ['echo ok'],
+                        'verification': ['uv run godotter runtime lint --project .'],
                     },
                     {
                         'id': 't2',
@@ -46,7 +46,7 @@ def test_plan_prepare_list_show_status(monkeypatch, tmp_path):
                         'depends_on': ['t1'],
                         'scope': ['game/systems/b/'],
                         'acceptance': ['B done'],
-                        'verification': ['echo ok'],
+                        'verification': ['uv run godotter runtime lint --project .'],
                     },
                 ]
             }
@@ -100,7 +100,7 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
                         'depends_on': ['t1'],
                         'scope': ['game/systems/t2/'],
                         'acceptance': ['2 done'],
-                        'verification': ['echo ok'],
+                        'verification': ['uv run godotter runtime lint --project .'],
                     },
                     {
                         'id': 't1',
@@ -109,7 +109,7 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
                         'depends_on': [],
                         'scope': ['game/systems/t1/'],
                         'acceptance': ['1 done'],
-                        'verification': ['echo ok'],
+                        'verification': ['uv run godotter runtime lint --project .'],
                     },
                 ]
             }
@@ -144,3 +144,43 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
     first = run_result.stdout.find('task_id=t1')
     second = run_result.stdout.find('task_id=t2')
     assert first != -1 and second != -1 and first < second
+
+
+def test_plan_prepare_rejects_non_executable_tasks(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.get_settings',
+        lambda: type(
+            'S',
+            (),
+            {
+                'workspace_root': tmp_path,
+                'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
+                'default_brain': 'stub',
+                'log_level': 'INFO',
+                'model_copy': lambda self, update=None: self,
+            },
+        )(),
+    )
+
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.Agent.handle_input',
+        lambda self, prompt: json.dumps(
+            {
+                'tasks': [
+                    {
+                        'id': 't1',
+                        'title': 'Locate all double_down references',
+                        'goal': 'Find every file that mentions double_down',
+                        'depends_on': [],
+                        'scope': ['game/features/tetris_gameplay/'],
+                        'acceptance': ['References are listed'],
+                        'verification': ['grep double_down'],
+                    },
+                ]
+            }
+        ),
+    )
+
+    result = runner.invoke(app, ['plan', 'prepare', 'fix input error'])
+    assert result.exit_code != 0
+    assert 'planner_quality_gate_failed' in result.output

@@ -35,7 +35,7 @@ from godotter.operations import (
     set_provider_key,
 )
 from godotter.runtime import fix_uid_paths, run_doctor
-from godotter.runtime.validators import validate_managers, validate_structure
+from godotter.runtime.validators import validate_managers, validate_nodepaths, validate_paths, validate_structure
 from godotter.tasks.planpack import (
     PlanPack,
     PlanState,
@@ -47,6 +47,12 @@ from godotter.tasks.planpack import (
     plan_state_path,
     write_planpack,
     write_planstate,
+)
+from godotter.tasks.planning import (
+    ScoutPromptRef,
+    build_plan_prompt,
+    normalize_plan_dependencies,
+    validate_plan_tasks,
 )
 from godotter.tasks.scout import collect_changed_files, scout_workspace, write_task_run_baseline
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
@@ -128,7 +134,7 @@ def task_prepare_command(
         'Obey Godotter dev-mode docs under Docs/.',
         'Levels must have a root Managers node and a Managers/EventBus child.',
         'Prefer structured events via EventBus; avoid implicit get-from-group lookups outside Managers.',
-        'Run `godotter runtime validate-structure` and `godotter runtime validate-managers` after changes.',
+        'Run `godotter runtime validate-structure`, `godotter runtime validate-managers`, and `godotter runtime validate-paths` after changes.',
     ]
     relevant: list[WorkPackFileRef] = [
         WorkPackFileRef(path='Docs/godotter_dev_mode_project_structure.md', reason='Dev-mode conventions', priority=10),
@@ -152,6 +158,7 @@ def task_prepare_command(
         verification=[
             'uv run godotter runtime validate-structure',
             'uv run godotter runtime validate-managers',
+            'uv run godotter runtime validate-paths',
             'uv run godotter runtime lint --project .',
             'uv run godotter runtime test --project . --pattern "*_smoke.tscn;*_harness.tscn" --timeout 30',
         ],
@@ -178,7 +185,7 @@ def task_scout_command(
         'Obey Godotter dev-mode docs under Docs/.',
         'Levels must have a root Managers node and a Managers/EventBus child.',
         'Prefer structured events via EventBus; avoid implicit get-from-group lookups outside Managers.',
-        'Run `godotter runtime validate-structure` and `godotter runtime validate-managers` after changes.',
+        'Run `godotter runtime validate-structure`, `godotter runtime validate-managers`, and `godotter runtime validate-paths` after changes.',
     ]
     relevant: list[WorkPackFileRef] = [
         WorkPackFileRef(path='Docs/godotter_dev_mode_project_structure.md', reason='Dev-mode conventions', priority=10),
@@ -204,6 +211,7 @@ def task_scout_command(
         verification=[
             'uv run godotter runtime validate-structure',
             'uv run godotter runtime validate-managers',
+            'uv run godotter runtime validate-paths',
             'uv run godotter runtime lint --project .',
             'uv run godotter runtime test --project . --pattern "*_smoke.tscn;*_harness.tscn" --timeout 30',
         ],
@@ -491,24 +499,9 @@ def plan_prepare_command(
         setattr(agent.brain, 'tool_choice', 'none')
 
     scout = scout_workspace(root, goal, max_files=40)
-    constraints = [
-        'Split work into small, independently verifiable tasks.',
-        'Each task must declare scope and verification commands.',
-        'Prefer changing one system/feature per task.',
-        'If task changes game/features or game/systems, include tests changes in same task.',
-    ]
-    prompt = '\n'.join(
-        [
-            'Create a multi-step implementation plan as JSON ONLY (no markdown, no backticks, no commentary).',
-            'Output must be a single JSON object with keys: tasks (array).',
-            'Each task must have: title, goal, scope (array of path prefixes), acceptance (array), verification (array), depends_on (array).',
-            'Keep tasks small (5-10 tasks).',
-            '',
-            f'goal={goal}',
-            '',
-            'Relevant files (scout):',
-            *[f'- {ref.path} {ref.reason}'.rstrip() for ref in scout.relevant_files[:20]],
-        ]
+    prompt, constraints = build_plan_prompt(
+        goal,
+        [ScoutPromptRef(path=ref.path, reason=ref.reason) for ref in scout.relevant_files],
     )
     raw = agent.handle_input(prompt)
     raw_stripped = raw.strip()
@@ -563,33 +556,11 @@ def plan_prepare_command(
             )
         )
 
-    task_ids = {t.id for t in tasks}
-    title_to_id = {}
-    for t in tasks:
-        key = t.title.strip().lower()
-        if key and key not in title_to_id:
-            title_to_id[key] = t.id
-
-    # Normalize depends_on: allow planner to reference either ids or titles.
-    for t in tasks:
-        normalized: list[str] = []
-        for dep in t.depends_on:
-            dep_norm = dep.strip()
-            if not dep_norm:
-                continue
-            if dep_norm in task_ids:
-                normalized.append(dep_norm)
-                continue
-            mapped = title_to_id.get(dep_norm.lower())
-            if mapped:
-                normalized.append(mapped)
-                continue
-            normalized.append(dep_norm)
-        t.depends_on = normalized
-
-    missing_deps = sorted({dep for t in tasks for dep in t.depends_on if dep not in task_ids})
-    if missing_deps:
-        raise typer.BadParameter(f'Planner returned unknown depends_on ids: {missing_deps}')
+    try:
+        normalize_plan_dependencies(tasks)
+        validate_plan_tasks(tasks)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     pack = PlanPack(
         plan_id=new_plan_id(),
@@ -802,6 +773,7 @@ def plan_run_command(
         verification_commands = _normalize_verification_commands(task.verification) or [
             'uv run godotter runtime validate-structure',
             'uv run godotter runtime validate-managers',
+            'uv run godotter runtime validate-paths',
             'uv run godotter runtime lint --project .',
         ]
 
@@ -1137,6 +1109,8 @@ def _normalize_verification_commands(commands: list[str]) -> list[str]:
         raw = str(cmd).strip()
         if not raw:
             continue
+        if raw.startswith('`') and raw.endswith('`') and len(raw) > 2:
+            raw = raw[1:-1].strip()
         lower = raw.lower()
 
         if raw.startswith('uv ') or raw.startswith('godotter '):
@@ -1501,6 +1475,60 @@ def runtime_validate_managers_command(
     report = validate_managers(root, levels_root=levels_root)
     typer.echo(f'workspace_root={root.as_posix()}')
     typer.echo(f'levels_root={(levels_root or (root / "game" / "levels")).as_posix()}')
+    typer.echo(f'ok={str(report.ok).lower()}')
+    for issue in report.issues:
+        typer.echo(f'issue code={issue.code} message={issue.message}')
+    if not report.ok:
+        raise typer.Exit(1)
+
+
+@runtime_app.command('validate-nodepaths', help='Validate exported NodePath properties in level scenes.')
+def runtime_validate_nodepaths_command(
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    scenes: Path | None = typer.Option(
+        None,
+        '--scenes',
+        help='Scenes root directory (defaults to workspace/game/levels).',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    if scenes:
+        scenes_root = scenes.resolve() if scenes.is_absolute() else (root / scenes).resolve()
+    else:
+        scenes_root = None
+    report = validate_nodepaths(root, scenes_root=scenes_root)
+    typer.echo(f'workspace_root={root.as_posix()}')
+    typer.echo(f'scenes_root={(scenes_root or (root / "game" / "levels")).as_posix()}')
+    typer.echo(f'ok={str(report.ok).lower()}')
+    for issue in report.issues:
+        typer.echo(f'issue code={issue.code} message={issue.message}')
+    if not report.ok:
+        raise typer.Exit(1)
+
+
+@runtime_app.command('validate-paths', help='Validate scene NodePaths and res:// resource paths.')
+def runtime_validate_paths_command(
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    fix: bool = typer.Option(
+        False,
+        '--fix',
+        help='Rewrite unresolved paths when exactly one safe suggestion is available.',
+    ),
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    report = validate_paths(root, fix=fix)
+    typer.echo(f'workspace_root={root.as_posix()}')
+    typer.echo(f'fix={str(fix).lower()}')
     typer.echo(f'ok={str(report.ok).lower()}')
     for issue in report.issues:
         typer.echo(f'issue code={issue.code} message={issue.message}')

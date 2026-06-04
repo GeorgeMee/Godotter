@@ -13,7 +13,7 @@ from godotter.utils.textio import atomic_write_text_utf8, read_text_utf8
 UID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
 SCENE_HEADER_RE = re.compile(r'^\[gd_scene(?P<attrs>[^\]]*)\]$')
 EXT_RESOURCE_RE = re.compile(r'^\[ext_resource(?P<attrs>[^\]]*)\]$')
-NODE_RE = re.compile(r'^\[node(?P<attrs>[^\]]*)\]$')
+NODE_RE = re.compile(r'^\[node(?P<attrs>.*)\]$')
 CONNECTION_RE = re.compile(r'^\[connection(?P<attrs>[^\]]*)\]$')
 ATTR_RE = re.compile(r'(\w+)=(?:"([^"]*)"|([^\s]+))')
 PROPERTY_RE = re.compile(r'^(?P<key>[A-Za-z0-9_:/]+)\s*=\s*(?P<value>.+)$')

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Godotter Web Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Godotter</p>
+          <h1>云端开发工作台</h1>
+          <p class="subtle">先讨论计划，再审批执行。默认不直接改项目。</p>
+        </div>
+        <div class="status-card" aria-label="服务状态">
+          <span class="pulse"></span>
+          <div>
+            <strong>Backend Online</strong>
+            <small id="workspace">读取工作区中...</small>
+          </div>
+        </div>
+        <nav class="quick-nav" aria-label="常用入口">
+          <a href="/config">配置</a>
+          <a href="/projects">项目</a>
+          <a href="/env">.env</a>
+          <a href="/api/projects.toml">projects.toml</a>
+        </nav>
+        <nav class="view-tabs" aria-label="Workspace views">
+          <a class="view-tab" href="#chat" data-view="chat">Chat</a>
+          <a class="view-tab" href="#task" data-view="task">Task</a>
+          <a class="view-tab" href="#log" data-view="log">Log</a>
+        </nav>
+        <p class="view-current">当前界面：<strong id="current-view-label">Chat</strong></p>
+      </header>
+
+      <section class="grid">
+        <article class="panel chat-panel" data-panel="chat">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Chat</p>
+              <h2>对话入口</h2>
+            </div>
+            <span class="badge">只生成计划</span>
+          </div>
+          <div class="timeline" id="timeline">
+            <div class="bubble assistant">
+              <strong>Planner</strong>
+              <p>你可以先给一句话需求。我会先生成计划，不直接执行。</p>
+            </div>
+            <div class="bubble user">
+              <strong>You</strong>
+              <p>例如：给俄罗斯方块加计分、Hold 和失败界面。</p>
+            </div>
+            <div class="bubble assistant warning">
+              <strong>System Note</strong>
+              <p>当前只是 Web 样式与流程草案，真实多轮会话还没有接入后端持久化。</p>
+            </div>
+          </div>
+          <form class="composer" id="composer">
+            <textarea id="prompt" rows="3" placeholder="输入消息。发送=普通对话；生成计划=创建待审批任务。"></textarea>
+            <div class="composer-actions">
+              <button type="submit">发送</button>
+              <button type="button" class="secondary" id="generate-plan">生成计划草案</button>
+              <button type="button" class="secondary" id="new-chat">新对话</button>
+              <a class="button-link" href="/config">打开配置</a>
+            </div>
+            <p class="subtle" id="session-status">未创建对话。</p>
+          </form>
+        </article>
+
+        <article class="panel task-panel is-hidden" data-panel="task">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Task</p>
+              <h2>任务审批与执行状态</h2>
+            </div>
+            <span class="badge amber" id="review-status">暂无计划</span>
+          </div>
+          <ol class="task-list" id="review-items"></ol>
+          <div class="approval-bar" id="review-actions"></div>
+        </article>
+
+        <article class="panel log-panel is-hidden" data-panel="log">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Log</p>
+              <h2>执行日志</h2>
+              <p class="subtle">执行批次（rj_*）是一轮运行；任务是 t1/t2；WorkPack 是每个任务执行时生成的上下文包。</p>
+            </div>
+            <span class="badge green" id="run-status">空闲</span>
+          </div>
+          <div class="run-actions">
+            <button type="button" class="secondary" id="cancel-run" disabled>停止当前运行</button>
+          </div>
+          <div class="run-history" id="run-history"></div>
+          <pre class="log" id="run-log">等待运行。</pre>
+        </article>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

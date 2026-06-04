@@ -149,3 +149,181 @@ def test_runtime_lint_command_accepts_project_option(monkeypatch, tmp_path):
     result = runner.invoke(app, ['runtime', 'lint', '--project', 'demo'])
     assert result.exit_code == 0
     assert captured['project'] == 'demo'
+
+
+def test_runtime_validate_nodepaths_reports_unresolved_exported_path(monkeypatch, tmp_path):
+    levels = tmp_path / 'game' / 'levels'
+    levels.mkdir(parents=True)
+    (levels / 'main.tscn').write_text(
+        '\n'.join(
+            [
+                '[gd_scene format=3]',
+                '',
+                '[node name="Main" type="Node"]',
+                '',
+                '[node name="Managers" type="Node" parent="."]',
+                '',
+                '[node name="EventBus" type="Node" parent="Managers"]',
+                '',
+                '[node name="UI" type="Control" parent="."]',
+                '',
+                '[node name="GameOverScreen" type="Control" parent="UI"]',
+                'event_bus_path = NodePath("../../Managers/MissingEventBus")',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['runtime', 'validate-nodepaths'])
+
+    assert result.exit_code == 1
+    assert 'ok=false' in result.stdout
+    assert 'unresolved_nodepath' in result.stdout
+    assert 'UI/GameOverScreen' in result.stdout
+    assert 'suggested=../../Managers/EventBus' in result.stdout
+
+
+def test_runtime_validate_nodepaths_accepts_resolved_exported_path(monkeypatch, tmp_path):
+    levels = tmp_path / 'game' / 'levels'
+    levels.mkdir(parents=True)
+    (levels / 'main.tscn').write_text(
+        '\n'.join(
+            [
+                '[gd_scene format=3]',
+                '',
+                '[node name="Main" type="Node"]',
+                '',
+                '[node name="Managers" type="Node" parent="."]',
+                '',
+                '[node name="EventBus" type="Node" parent="Managers"]',
+                '',
+                '[node name="UI" type="Control" parent="."]',
+                '',
+                '[node name="GameOverScreen" type="Control" parent="UI"]',
+                'event_bus_path = NodePath("../../Managers/EventBus")',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['runtime', 'validate-nodepaths'])
+
+    assert result.exit_code == 0
+    assert 'ok=true' in result.stdout
+
+
+def test_runtime_validate_paths_reports_missing_scene_resource_with_suggestion(monkeypatch, tmp_path):
+    levels = tmp_path / 'game' / 'levels'
+    scripts = tmp_path / 'game' / 'ui' / 'scripts'
+    levels.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    (scripts / 'menu.gd').write_text('extends Control\n', encoding='utf-8')
+    (levels / 'main.tscn').write_text(
+        '\n'.join(
+            [
+                '[gd_scene load_steps=2 format=3]',
+                '',
+                '[ext_resource type="Script" path="res://game/ui/scripts/missing_menu.gd" id="1_script"]',
+                '',
+                '[node name="Main" type="Control"]',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['runtime', 'validate-paths'])
+
+    assert result.exit_code == 1
+    assert 'unresolved_resource_path' in result.stdout
+    assert 'res://game/ui/scripts/missing_menu.gd' in result.stdout
+
+
+def test_runtime_validate_paths_reports_script_res_path_with_unique_suggestion(monkeypatch, tmp_path):
+    scripts = tmp_path / 'game' / 'features' / 'demo' / 'scripts'
+    views = tmp_path / 'game' / 'ui' / 'views'
+    scripts.mkdir(parents=True)
+    views.mkdir(parents=True)
+    (views / 'game_over.tscn').write_text('[gd_scene format=3]\n\n[node name="GameOver" type="Control"]\n', encoding='utf-8')
+    (scripts / 'demo.gd').write_text(
+        'extends Node\nconst GameOver = preload("res://game/ui/scenes/game_over.tscn")\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['runtime', 'validate-paths'])
+
+    assert result.exit_code == 1
+    assert 'unresolved_resource_path' in result.stdout
+    assert 'suggested=res://game/ui/views/game_over.tscn' in result.stdout
+
+
+def test_runtime_validate_paths_fix_rewrites_unique_nodepath_suggestion(monkeypatch, tmp_path):
+    levels = tmp_path / 'game' / 'levels'
+    levels.mkdir(parents=True)
+    scene_path = levels / 'main.tscn'
+    scene_path.write_text(
+        '\n'.join(
+            [
+                '[gd_scene format=3]',
+                '',
+                '[node name="Main" type="Node"]',
+                '',
+                '[node name="Managers" type="Node" parent="."]',
+                '',
+                '[node name="EventBus" type="Node" parent="Managers"]',
+                '',
+                '[node name="UI" type="Control" parent="."]',
+                '',
+                '[node name="ScoreLabel" type="Label" parent="UI"]',
+                'event_bus_path = NodePath("../../../Managers/EventBus")',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['runtime', 'validate-paths', '--fix'])
+
+    assert result.exit_code == 0
+    assert 'fixed_path' in result.stdout
+    assert 'ok=true' in result.stdout
+    assert 'event_bus_path = NodePath("../../Managers/EventBus")' in scene_path.read_text(encoding='utf-8')
+
+
+def test_runtime_validate_paths_fix_rewrites_unique_script_res_path(monkeypatch, tmp_path):
+    scripts = tmp_path / 'game' / 'features' / 'demo' / 'scripts'
+    levels = tmp_path / 'game' / 'levels'
+    views = tmp_path / 'game' / 'ui' / 'views'
+    scripts.mkdir(parents=True)
+    levels.mkdir(parents=True)
+    views.mkdir(parents=True)
+    (levels / 'main.tscn').write_text('[gd_scene format=3]\n\n[node name="Main" type="Node"]\n', encoding='utf-8')
+    target = views / 'game_over.tscn'
+    target.write_text('[gd_scene format=3]\n\n[node name="GameOver" type="Control"]\n', encoding='utf-8')
+    script_path = scripts / 'demo.gd'
+    script_path.write_text(
+        'extends Node\nconst GameOver = preload("res://game/ui/scenes/game_over.tscn")\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['runtime', 'validate-paths', '--fix'])
+
+    assert result.exit_code == 0
+    assert 'fixed_path' in result.stdout
+    assert 'res://game/ui/views/game_over.tscn' in script_path.read_text(encoding='utf-8')
