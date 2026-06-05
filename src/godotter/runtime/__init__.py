@@ -20,6 +20,12 @@ from godotter.runtime.scene_parser import (
     parse_scene_text,
 )
 from godotter.runtime.uid_tools import UidFixChange, UidFixResult, fix_uid_paths, scan_uid_map
+from godotter.runtime.verify import (
+    default_verify_commands,
+    latest_verify_report_path,
+    load_latest_verify_report,
+    run_verify,
+)
 
 __all__ = [
     'DoctorReport',
@@ -38,12 +44,16 @@ __all__ = [
     'atomic_write',
     'filename_to_node_name',
     'fix_uid_paths',
+    'default_verify_commands',
     'generate_minimal_scene',
     'generate_uid',
+    'latest_verify_report_path',
     'load_project_info',
+    'load_latest_verify_report',
     'parse_scene',
     'parse_scene_header',
     'parse_scene_text',
     'run_doctor',
+    'run_verify',
     'scan_uid_map',
 ]

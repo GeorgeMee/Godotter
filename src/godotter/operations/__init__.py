@@ -5,6 +5,13 @@ from godotter.operations.scenes import (
     scaffold_scene_only,
     scaffold_scene_with_script,
 )
+from godotter.operations.tests import (
+    TestScaffoldResult,
+    expected_test_dirs_for_paths,
+    infer_test_kinds_for_paths,
+    scaffold_test,
+    test_kind_pattern,
+)
 from godotter.operations.providers import (
     check_provider_connectivity,
     fetch_model_rows,
@@ -32,6 +39,8 @@ __all__ = [
     'format_provider_rows',
     'format_runtime_result',
     'format_uid_fix_result',
+    'expected_test_dirs_for_paths',
+    'infer_test_kinds_for_paths',
     'normalize_provider_name',
     'render_project_scaffold_summary',
     'resolve_runtime_target',
@@ -40,7 +49,10 @@ __all__ = [
     'SceneScaffoldResult',
     'scaffold_scene_only',
     'scaffold_scene_with_script',
+    'scaffold_test',
     'set_default_provider',
     'set_model_for_provider',
     'set_provider_key',
+    'test_kind_pattern',
+    'TestScaffoldResult',
 ]

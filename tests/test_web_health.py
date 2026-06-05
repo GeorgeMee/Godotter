@@ -4,6 +4,8 @@ def test_web_health_importable():
             _append_message,
             _append_plan_error,
             _append_run_event,
+            _enrich_run_artifacts,
+            _extract_prefixed_path,
             _create_plan_review,
             _create_run_job,
             _create_session,
@@ -71,6 +73,54 @@ def test_task_status_frontend_preserves_runtime_state():
     assert 'if (taskRuntimeRunId !== currentRun.run_id)' in script
     assert 'taskRuntimeStatus[taskId] = taskRuntimeStatus[taskId] ||' in script
     assert 'event.type === "command" || event.type === "stdout"' in script
+
+
+def test_task_page_mentions_runstate_and_verify_report():
+    from pathlib import Path
+
+    html = Path('src/godotter_web/static/index.html').read_text(encoding='utf-8')
+    script = Path('src/godotter_web/static/app.js').read_text(encoding='utf-8')
+    assert 'id="task-summary"' in html
+    assert 'function renderTaskSummary(review)' in script
+    assert 'function summaryHint(review, run, verify)' in script
+    assert 'function runtimeDetailsHtml(runtime)' in script
+    assert 'runtime.runstate' in script
+    assert 'runtime.verify_report' in script
+    assert 'flow-status' not in html
+
+
+def test_web_run_artifact_enrichment(tmp_path):
+    try:
+        from godotter_web.app import _enrich_run_artifacts, _extract_prefixed_path
+    except ModuleNotFoundError:
+        return
+
+    runstate_path = tmp_path / '.godotter' / 'runs' / 'run_demo.json'
+    verify_path = tmp_path / '.godotter' / 'reports' / 'verify' / 'vr_demo.json'
+    runstate_path.parent.mkdir(parents=True)
+    verify_path.parent.mkdir(parents=True)
+    runstate_path.write_text('{"run_id":"run_demo","status":"pass","attempts":[{"index":1,"status":"pass"}]}', encoding='utf-8')
+    verify_path.write_text('{"report_id":"vr_demo","result":"pass","summary":{"total":1,"passed":1}}', encoding='utf-8')
+
+    stdout = f'runstate={runstate_path.as_posix()}\ntask_run_verify_report={verify_path.as_posix()}\n'
+    assert _extract_prefixed_path(stdout, 'runstate=') == runstate_path.as_posix()
+    enriched = _enrich_run_artifacts(
+        tmp_path,
+        {
+            'run_id': 'rj_demo',
+            'commands': [
+                {
+                    'task_id': 't1',
+                    'exit_code': 0,
+                    'runstate_path': runstate_path.as_posix(),
+                    'verify_report_path': verify_path.as_posix(),
+                }
+            ],
+        },
+    )
+    command = enriched['commands'][0]
+    assert command['runstate']['run_id'] == 'run_demo'
+    assert command['verify_report']['report_id'] == 'vr_demo'
 
 
 def test_run_ids_are_explained_in_frontend():

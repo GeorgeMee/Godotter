@@ -14,6 +14,7 @@ PLAN_CONSTRAINTS = [
     'Each task must declare scope, acceptance, verification commands, and dependencies.',
     'Prefer changing one system/feature per task.',
     'If task changes game/features or game/systems, include tests changes in the same task.',
+    'Choose the smallest required test kind: system, feature, integration, level-smoke, or e2e.',
 ]
 
 NON_EXECUTABLE_STARTS = (
@@ -82,6 +83,7 @@ def build_plan_prompt(goal: str, scout_refs: list[ScoutPromptRef]) -> tuple[str,
             'Every task must include code/content changes and automated verification in the same task.',
             'Each verification item must be an executable command string, preferably starting with "uv run godotter runtime ...".',
             'If a task edits .tscn scenes, exported NodePath wiring, or res:// file references, include "uv run godotter runtime validate-paths".',
+            'Choose verification by scope: systems -> --kind system, features -> --kind feature, multi-module flow -> --kind integration, levels/UI -> --kind level-smoke or --kind e2e.',
             'Do not write verification as prose such as "Run the game" or "Test that ...".',
             'For bug fixes, use 1-3 tasks unless multiple independent systems must change.',
             '',

@@ -47,7 +47,9 @@ def validate_structure(workspace_root: Path) -> ValidationReport:
         workspace_root / "tests" / "core",
         workspace_root / "tests" / "systems",
         workspace_root / "tests" / "features",
+        workspace_root / "tests" / "integration",
         workspace_root / "tests" / "levels",
+        workspace_root / "tests" / "e2e",
     ]
     for directory in required_dirs:
         if not directory.is_dir():

@@ -4,6 +4,7 @@ import subprocess
 from typer.testing import CliRunner
 
 from godotter.interfaces.cli import app
+from godotter.tasks.runstate import load_runstate
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, write_workpack
 
 
@@ -341,16 +342,27 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
             self.settings = kwargs['settings']
 
         def handle_input(self, prompt):
-            (self.settings.workspace_root / 'game' / 'features' / 'snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'game' / 'features' / 'snake').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'game' / 'features' / 'snake' / 'snake.gd').write_text('extends Node\n', encoding='utf-8')
             (self.settings.workspace_root / 'game' / 'levels' / 'main.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
-            (self.settings.workspace_root / 'tests' / 'features' / 'test_snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'tests' / 'features' / 'snake').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'tests' / 'features' / 'snake' / 'test_snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'tests' / 'levels').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'tests' / 'levels' / 'main_smoke.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
             return 'complete changes'
 
     monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 0
-    assert 'task_run_audit changed_files=3' in result.stdout
+    assert 'task_run_audit changed_files=4' in result.stdout
+    assert 'runstate=' in result.stdout
+    state = load_runstate(tmp_path / '.godotter' / 'runs' / 'latest.json')
+    assert state.status == 'pass'
+    assert state.task_id == 'wp_complete'
+    assert len(state.attempts) == 1
+    assert state.attempts[0].status == 'pass'
+    assert 'game/features/snake/snake.gd' in state.attempts[0].changed_files
 
 
 def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
@@ -399,9 +411,13 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
             self.settings = kwargs['settings']
 
         def handle_input(self, prompt):
-            (self.settings.workspace_root / 'game' / 'features' / 'snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'game' / 'features' / 'snake').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'game' / 'features' / 'snake' / 'snake.gd').write_text('extends Node\n', encoding='utf-8')
             (self.settings.workspace_root / 'game' / 'levels' / 'main.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
-            (self.settings.workspace_root / 'tests' / 'features' / 'test_snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'tests' / 'features' / 'snake').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'tests' / 'features' / 'snake' / 'test_snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'tests' / 'levels').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'tests' / 'levels' / 'main_smoke.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
             return 'complete changes'
 
     monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
@@ -458,9 +474,13 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
             self.settings = kwargs['settings']
 
         def handle_input(self, prompt):
-            (self.settings.workspace_root / 'game' / 'features' / 'snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'game' / 'features' / 'snake').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'game' / 'features' / 'snake' / 'snake.gd').write_text('extends Node\n', encoding='utf-8')
             (self.settings.workspace_root / 'game' / 'levels' / 'main.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
-            (self.settings.workspace_root / 'tests' / 'features' / 'test_snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'tests' / 'features' / 'snake').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'tests' / 'features' / 'snake' / 'test_snake.gd').write_text('extends Node\n', encoding='utf-8')
+            (self.settings.workspace_root / 'tests' / 'levels').mkdir(parents=True, exist_ok=True)
+            (self.settings.workspace_root / 'tests' / 'levels' / 'main_smoke.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
             return 'complete changes'
 
     monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
@@ -468,4 +488,10 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 1
     assert 'task_run_verify exit_code=2 timed_out=false' in result.stdout
+    state = load_runstate(tmp_path / '.godotter' / 'runs' / 'latest.json')
+    assert state.status == 'fail'
+    assert state.task_id == 'wp_verify_fail'
+    assert state.attempts[0].status == 'fail'
+    assert state.attempts[0].failure_report is not None
+    assert state.attempts[0].verify_report is not None
 

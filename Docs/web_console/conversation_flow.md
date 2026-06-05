@@ -52,6 +52,18 @@ The first real implementation should avoid a full TUI clone. Keep the API small:
 
 Do not rely on prompts alone for this workflow. Prompts can instruct the model, but approvals, execution gates, retry limits, and dangerous-operation checks must be represented as explicit server-side state and enforced by code.
 
+## Current execution artifacts
+
+The CLI now writes structured artifacts that the web console should read instead of inferring state from raw logs only:
+
+- `PlanPack`: `.godotter/plans/*.json`, created by `godotter plan prepare`.
+- `PlanState`: `.godotter/plans/*.state.json`, updated by `godotter plan run`.
+- `WorkPack`: `.godotter/workpacks/*.json`, created for each executable task.
+- `RunState`: `.godotter/runs/run_*.json` and `.godotter/runs/latest.json`, updated once per `task run` attempt.
+- `VerifyReport`: `.godotter/reports/verify/vr_*.json` and `.godotter/reports/verify/latest.json`, created by `runtime verify` and attached to failed runs/tasks.
+
+The intended display flow is: show PlanState for task status, RunState for current attempt/retry details, and VerifyReport for the concrete validation failure.
+
 ## Detailed design
 
 See `Docs/web_console/chat_backend.md` for the concrete backend model, storage layout, API shape, state machines, and implementation order.

@@ -1,8 +1,10 @@
 from pathlib import Path
+import json
 
 from typer.testing import CliRunner
 
 from godotter.interfaces.cli import app
+from godotter.operations.tests import expected_test_dirs_for_paths, infer_test_kinds_for_paths
 
 
 class FakeRunResult:
@@ -67,6 +69,13 @@ class FakeRuntimeTarget:
         self.main_scene = 'res://scenes/main.tscn'
 
 
+class FakeCompletedProcess:
+    def __init__(self, returncode: int = 0, stdout: bytes = b'ok', stderr: bytes = b'') -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 runner = CliRunner()
 
 
@@ -104,6 +113,51 @@ def test_runtime_command_requires_godot_path(monkeypatch, tmp_path):
     result = runner.invoke(app, ['runtime', 'lint'])
     assert result.exit_code != 0
     assert 'GODOT_PATH is not configured' in result.output
+
+
+def test_runtime_verify_writes_json_report(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr(
+        'godotter.runtime.verify.subprocess.run',
+        lambda command, cwd, capture_output, timeout, shell: FakeCompletedProcess(stdout=f'ok:{command}'.encode()),
+    )
+
+    result = runner.invoke(app, ['runtime', 'verify', '--json-output', '.godotter/reports/verify/custom.json'])
+
+    assert result.exit_code == 0
+    report_path = tmp_path / '.godotter' / 'reports' / 'verify' / 'custom.json'
+    latest_path = tmp_path / '.godotter' / 'reports' / 'verify' / 'latest.json'
+    assert report_path.exists()
+    assert latest_path.exists()
+    report = json.loads(report_path.read_text(encoding='utf-8'))
+    assert report['result'] == 'pass'
+    assert report['summary']['passed'] == 6
+    assert 'check name=validate_structure result=pass' in result.stdout
+
+
+def test_runtime_verify_failed_check_exits_nonzero(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+
+    def _fake_run(command, cwd, capture_output, timeout, shell):
+        if 'validate-managers' in command:
+            return FakeCompletedProcess(returncode=1, stderr=b'missing Managers')
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr('godotter.runtime.verify.subprocess.run', _fake_run)
+
+    result = runner.invoke(app, ['runtime', 'verify', '--json-output', '.godotter/reports/verify/fail.json'])
+
+    assert result.exit_code == 1
+    report = json.loads((tmp_path / '.godotter' / 'reports' / 'verify' / 'fail.json').read_text(encoding='utf-8'))
+    assert report['result'] == 'fail'
+    assert report['failed_check'] == 'validate_managers'
+    assert 'check name=validate_managers result=fail exit_code=1' in result.stdout
 
 
 def test_runtime_doctor_command(monkeypatch, tmp_path):
@@ -327,3 +381,63 @@ def test_runtime_validate_paths_fix_rewrites_unique_script_res_path(monkeypatch,
     assert result.exit_code == 0
     assert 'fixed_path' in result.stdout
     assert 'res://game/ui/views/game_over.tscn' in script_path.read_text(encoding='utf-8')
+
+
+def test_scaffold_test_command_scaffolds_e2e_harness(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+
+    result = runner.invoke(app, ['scaffold', 'test', 'start-game', '--kind', 'e2e'])
+
+    assert result.exit_code == 0
+    assert 'kind=e2e' in result.stdout
+    assert (tmp_path / 'tests' / 'e2e' / 'start_game' / 'start_game_e2e.tscn').is_file()
+    script = tmp_path / 'tests' / 'e2e' / 'start_game' / 'test_start_game_e2e.gd'
+    assert script.is_file()
+    assert 'InputSim/InputMap/UI signals' in script.read_text(encoding='utf-8')
+
+
+def test_root_help_exposes_scaffold_not_top_level_test():
+    result = runner.invoke(app, ['--help'])
+
+    assert result.exit_code == 0
+    assert 'scaffold' in result.stdout
+    assert ' test ' not in result.stdout
+
+
+def test_runtime_test_kind_uses_preset_patterns(monkeypatch, tmp_path):
+    tests_root = tmp_path / 'tests'
+    (tests_root / 'systems' / 'inventory').mkdir(parents=True)
+    (tests_root / 'features' / 'pickup').mkdir(parents=True)
+    (tests_root / 'systems' / 'inventory' / 'inventory_harness.tscn').write_text('', encoding='utf-8')
+    (tests_root / 'features' / 'pickup' / 'pickup_harness.tscn').write_text('', encoding='utf-8')
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'godot_path': '/usr/bin/godot',
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
+
+    result = runner.invoke(app, ['runtime', 'test', '--kind', 'system'])
+
+    assert result.exit_code == 0
+    assert 'count=1' in result.stdout
+    assert 'target=res://tests/systems/inventory/inventory_harness.tscn' in result.stdout
+    assert 'features/pickup' not in result.stdout
+
+
+def test_infer_test_kinds_and_expected_dirs_from_paths():
+    paths = {
+        'game/systems/inventory/scripts/inventory_manager.gd',
+        'game/features/item_pickup/scripts/item_pickup_feature.gd',
+        'ui/views/main_menu.tscn',
+    }
+
+    assert infer_test_kinds_for_paths(paths) == ['system', 'feature', 'integration', 'level-smoke', 'e2e']
+    assert expected_test_dirs_for_paths(paths) == [
+        'tests/systems/inventory/',
+        'tests/features/item_pickup/',
+        'tests/integration/',
+        'tests/levels/',
+        'tests/e2e/',
+    ]

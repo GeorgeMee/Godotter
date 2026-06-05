@@ -388,10 +388,56 @@ def _list_runs(workspace_root: Path, session_id: str) -> list[dict[str, object]]
     runs: list[dict[str, object]] = []
     for path in sorted(runs_root.glob('rj_*.json'), key=lambda item: item.stat().st_mtime, reverse=True):
         try:
-            runs.append(_read_json(path))
+            runs.append(_enrich_run_artifacts(workspace_root, _read_json(path)))
         except Exception:
             continue
     return runs
+
+
+def _enrich_run_artifacts(workspace_root: Path, run: dict[str, object]) -> dict[str, object]:
+    enriched = dict(run)
+    commands = []
+    for command in enriched.get('commands', []) or []:
+        if isinstance(command, dict):
+            commands.append(_enrich_command_artifacts(workspace_root, command))
+    enriched['commands'] = commands
+    return enriched
+
+
+def _enrich_command_artifacts(workspace_root: Path, command: dict[str, object]) -> dict[str, object]:
+    enriched = dict(command)
+    runstate_path = str(enriched.get('runstate_path') or '').strip()
+    verify_report_path = str(enriched.get('verify_report_path') or '').strip()
+    if runstate_path and 'runstate' not in enriched:
+        runstate = _read_artifact_json(workspace_root, runstate_path)
+        if runstate is not None:
+            enriched['runstate'] = runstate
+    if verify_report_path and 'verify_report' not in enriched:
+        verify_report = _read_artifact_json(workspace_root, verify_report_path)
+        if verify_report is not None:
+            enriched['verify_report'] = verify_report
+    return enriched
+
+
+def _read_artifact_json(workspace_root: Path, value: str) -> dict[str, object] | None:
+    path = Path(value)
+    if not path.is_absolute():
+        path = workspace_root / path
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        return _read_json(path)
+    except Exception:
+        return None
+
+
+def _extract_prefixed_path(text: str, prefix: str) -> str | None:
+    for line in reversed((text or '').splitlines()):
+        raw = line.strip()
+        if raw.startswith(prefix):
+            value = raw[len(prefix) :].strip()
+            return value or None
+    return None
 
 
 def _find_active_run_for_review(
@@ -724,6 +770,19 @@ def _execute_run_job_sync(workspace_root: Path, session_id: str, run_id: str) ->
             'stderr': '',
             'timed_out': timed_out['value'],
         }
+        stdout_text = str(command_result['stdout'])
+        runstate_path = _extract_prefixed_path(stdout_text, 'runstate=')
+        verify_report_path = _extract_prefixed_path(stdout_text, 'task_run_verify_report=') or _extract_prefixed_path(stdout_text, 'report=')
+        if runstate_path:
+            command_result['runstate_path'] = runstate_path
+            runstate = _read_artifact_json(workspace_root, runstate_path)
+            if runstate is not None:
+                command_result['runstate'] = runstate
+        if verify_report_path:
+            command_result['verify_report_path'] = verify_report_path
+            verify_report = _read_artifact_json(workspace_root, verify_report_path)
+            if verify_report is not None:
+                command_result['verify_report'] = verify_report
         commands.append(command_result)
         exit_codes.append(return_code)
         _append_run_event(
@@ -743,6 +802,8 @@ def _execute_run_job_sync(workspace_root: Path, session_id: str, run_id: str) ->
             stored_run['finished_at'] = stored_run.get('finished_at') or _now_iso()
             _save_run(workspace_root, session_id, stored_run)
             return stored_run
+        stored_run['commands'] = commands
+        _save_run(workspace_root, session_id, stored_run)
         if timed_out['value']:
             break
         if return_code != 0:
@@ -1342,7 +1403,7 @@ def project_session_run_get(name: str, session_id: str, run_id: str, request: Re
     _load_session(root, session_id)
     return {
         'ok': True,
-        'run': _load_run(root, session_id, run_id),
+        'run': _enrich_run_artifacts(root, _load_run(root, session_id, run_id)),
     }
 
 
@@ -1409,7 +1470,7 @@ def project_session_run_events(
     _load_session(root, session_id)
     return {
         'ok': True,
-        'run': _load_run(root, session_id, run_id),
+        'run': _enrich_run_artifacts(root, _load_run(root, session_id, run_id)),
         'events': _read_run_events(root, session_id, run_id, after=after),
     }
 

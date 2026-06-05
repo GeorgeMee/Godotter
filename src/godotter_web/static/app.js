@@ -93,6 +93,7 @@ async function loadSavedSession() {
     currentSession = null;
     renderMessages([]);
     status.textContent = "未创建对话。发送第一条消息时会自动创建。";
+    renderTaskSummary(null);
     return;
   }
 
@@ -175,14 +176,17 @@ function renderReview(review) {
   if (!review) {
     status.textContent = "暂无任务";
     list.innerHTML = '<li class="muted">生成计划后，这里会显示任务审批与执行状态。</li>';
+    renderTaskSummary(null);
     return;
   }
 
   status.textContent = review.status || "in_review";
+  renderTaskSummary(review);
   for (const item of review.items || []) {
     const node = document.createElement("li");
     const commentId = `comment-${review.review_id}-${item.item_id}`;
     const runtime = taskRuntimeStatus[item.item_id] || {status: "not_started", label: "未执行"};
+    const runtimeDetails = runtimeDetailsHtml(runtime);
     node.innerHTML = `
       <div class="task-title-row">
         <label><span class="task-id">${escapeHtml(item.item_id)}</span>${escapeHtml(item.title)}</label>
@@ -192,6 +196,7 @@ function renderReview(review) {
         </div>
       </div>
       <p class="muted">${escapeHtml(item.goal || "")}</p>
+      ${runtimeDetails}
       <textarea id="${commentId}" placeholder="需要修改时填写评论；批准可留空。">${escapeHtml(item.comment || "")}</textarea>
       <div class="approval-bar">
         <button type="button" data-action="approved">批准</button>
@@ -227,6 +232,81 @@ function renderReview(review) {
     runButton.addEventListener("click", () => runApprovedReview(review.review_id));
     actions.appendChild(runButton);
   }
+}
+
+function renderTaskSummary(review) {
+  const summary = document.getElementById("task-summary");
+  if (!summary) {
+    return;
+  }
+  if (!review) {
+    summary.innerHTML = `<strong>当前状态：</strong><span>暂无计划</span><small>先在 Chat 里生成 PlanPack。</small>`;
+    return;
+  }
+  const items = review.items || [];
+  const approvedCount = items.filter((item) => item.status === "approved").length;
+  const revisionCount = items.filter((item) => item.status === "needs_revision").length;
+  const rejectedCount = items.filter((item) => item.status === "rejected").length;
+  const latestCommand = latestCommandResult();
+  const runstate = latestCommand?.runstate;
+  const verify = latestCommand?.verify_report;
+  const attempts = runstate?.attempts || [];
+  const latestAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+  const phase = currentRun
+    ? (isActiveRun(currentRun) ? "执行中" : runStatusLabel(currentRun.status))
+    : (approvedCount ? "可执行" : "待审批");
+  const details = [
+    `审批 ${approvedCount}/${items.length}`,
+    revisionCount ? `${revisionCount} 项需修改` : "",
+    rejectedCount ? `${rejectedCount} 项已拒绝` : "",
+    currentRun ? `批次 ${currentRun.run_id}` : "",
+    latestAttempt ? `Attempt ${latestAttempt.index}: ${latestAttempt.status}` : "",
+    verify ? `验证 ${verify.result || "unknown"}${verify.failed_check ? `，失败点 ${verify.failed_check}` : ""}` : "",
+  ].filter(Boolean);
+  summary.innerHTML = `
+    <strong>当前状态：${escapeHtml(phase)}</strong>
+    <span>${details.map(escapeHtml).join(" · ")}</span>
+    <small>${escapeHtml(summaryHint(review, currentRun, verify))}</small>
+  `;
+}
+
+function summaryHint(review, run, verify) {
+  if (!review) {
+    return "尚未生成计划。";
+  }
+  if (!run) {
+    return "批准一个或多个任务后，可以开始执行。";
+  }
+  if (isActiveRun(run)) {
+    return "正在执行，详细输出见 Log 页面。";
+  }
+  if (verify && verify.result !== "pass") {
+    return "验证失败，展开任务卡查看 RunState 和 VerifyReport 摘要。";
+  }
+  return "执行已结束。";
+}
+
+function latestCommandResult() {
+  const commands = currentRun?.commands || [];
+  return commands.length ? commands[commands.length - 1] : null;
+}
+
+function runtimeDetailsHtml(runtime) {
+  const parts = [];
+  if (runtime.runstate) {
+    const attempts = runtime.runstate.attempts || [];
+    const latestAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+    parts.push(`RunState: ${attempts.length} attempt(s), ${latestAttempt?.status || runtime.runstate.status || "unknown"}`);
+  }
+  if (runtime.verify_report) {
+    const summary = runtime.verify_report.summary || {};
+    const failed = runtime.verify_report.failed_check || "none";
+    parts.push(`VerifyReport: ${runtime.verify_report.result || "unknown"}, failed=${failed}, checks=${summary.passed || 0}/${summary.total || 0}`);
+  }
+  if (!parts.length) {
+    return "";
+  }
+  return `<div class="runtime-details">${parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>`;
 }
 
 async function updateReviewItem(reviewId, itemId, status, comment) {
@@ -477,6 +557,59 @@ function appendBubble(role, text, scroll = true) {
   timeline.appendChild(bubble);
   if (scroll) {
     timeline.scrollTop = timeline.scrollHeight;
+  }
+}
+
+function refreshTaskRuntimeStatus() {
+  if (!currentRun) {
+    taskRuntimeRunId = null;
+    taskRuntimeStatus = {};
+    return;
+  }
+  if (taskRuntimeRunId !== currentRun.run_id) {
+    taskRuntimeRunId = currentRun.run_id;
+    taskRuntimeStatus = {};
+  }
+  for (const taskId of currentRun.task_ids || []) {
+    taskRuntimeStatus[taskId] = taskRuntimeStatus[taskId] || (isActiveRun(currentRun)
+      ? {status: "queued", label: "queued"}
+      : {status: "not_started", label: "not started"});
+  }
+  for (const command of currentRun.commands || []) {
+    const taskId = command.task_id;
+    if (!taskId) {
+      continue;
+    }
+    if (command.exit_code !== undefined && command.exit_code !== null) {
+      const passed = command.exit_code === 0;
+      taskRuntimeStatus[taskId] = {
+        status: passed ? "passed" : "failed",
+        label: passed ? "passed" : "failed",
+        runstate: command.runstate,
+        verify_report: command.verify_report,
+      };
+    }
+  }
+}
+
+function updateTaskRuntimeFromEvent(event) {
+  if (!event.task_id) {
+    return;
+  }
+  if (!taskRuntimeStatus[event.task_id]) {
+    taskRuntimeStatus[event.task_id] = {status: "queued", label: "queued"};
+  }
+  if (event.type === "command" || event.type === "stdout") {
+    taskRuntimeStatus[event.task_id] = {status: "running", label: "running"};
+  }
+  if (event.type === "command_result" && event.payload) {
+    const exitCode = event.payload.exit_code;
+    taskRuntimeStatus[event.task_id] = {
+      status: exitCode === 0 ? "passed" : "failed",
+      label: exitCode === 0 ? "passed" : "failed",
+      runstate: event.payload.runstate,
+      verify_report: event.payload.verify_report,
+    };
   }
 }
 

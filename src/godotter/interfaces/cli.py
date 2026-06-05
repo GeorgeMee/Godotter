@@ -24,17 +24,21 @@ from godotter.operations import (
     format_provider_rows,
     format_runtime_result,
     format_uid_fix_result,
+    expected_test_dirs_for_paths,
+    infer_test_kinds_for_paths,
     normalize_provider_name,
     render_project_scaffold_summary,
     resolve_runtime_target,
     scaffold_scene_only,
     scaffold_scene_with_script,
     scaffold_godot_project,
+    scaffold_test,
     set_default_provider,
     set_model_for_provider,
     set_provider_key,
+    test_kind_pattern,
 )
-from godotter.runtime import fix_uid_paths, run_doctor
+from godotter.runtime import default_verify_commands, fix_uid_paths, latest_verify_report_path, run_doctor, run_verify
 from godotter.runtime.validators import validate_managers, validate_nodepaths, validate_paths, validate_structure
 from godotter.tasks.planpack import (
     PlanPack,
@@ -55,6 +59,13 @@ from godotter.tasks.planning import (
     validate_plan_tasks,
 )
 from godotter.tasks.scout import collect_changed_files, scout_workspace, write_task_run_baseline
+from godotter.tasks.runstate import (
+    append_attempt,
+    create_runstate,
+    finish_attempt,
+    finish_runstate,
+    write_runstate,
+)
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
 from godotter.tools import ToolRegistry, build_default_tools
 
@@ -82,6 +93,8 @@ project_app = typer.Typer(help='Manage Godot projects and scaffolding.')
 task_app = typer.Typer(help='Prepare and run workpacks for agent tasks.')
 plan_app = typer.Typer(help='Prepare and run multi-step plans (PlanPacks).')
 scene_app = typer.Typer(help='Create scenes and paired scripts (tscn + gd).')
+test_app = typer.Typer(help='Create and manage Godotter test harnesses.')
+scaffold_app = typer.Typer(help='Generate convention-compliant project files.')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
@@ -91,6 +104,7 @@ app.add_typer(project_app, name='project')
 app.add_typer(task_app, name='task')
 app.add_typer(plan_app, name='plan')
 app.add_typer(scene_app, name='scene')
+app.add_typer(scaffold_app, name='scaffold')
 
 
 @app.callback()
@@ -134,11 +148,12 @@ def task_prepare_command(
         'Obey Godotter dev-mode docs under Docs/.',
         'Levels must have a root Managers node and a Managers/EventBus child.',
         'Prefer structured events via EventBus; avoid implicit get-from-group lookups outside Managers.',
-        'Run `godotter runtime validate-structure`, `godotter runtime validate-managers`, and `godotter runtime validate-paths` after changes.',
+        'Run `godotter runtime verify` after changes; use lower-level runtime validators only for diagnosis.',
     ]
     relevant: list[WorkPackFileRef] = [
         WorkPackFileRef(path='Docs/godotter_dev_mode_project_structure.md', reason='Dev-mode conventions', priority=10),
         WorkPackFileRef(path='Docs/godotter_template_project.md', reason='Template conventions', priority=20),
+        WorkPackFileRef(path='Docs/testing_strategy.md', reason='Testing strategy', priority=25),
     ]
     for extra in include:
         relevant.append(WorkPackFileRef(path=extra, reason='User-specified', priority=50))
@@ -155,13 +170,7 @@ def task_prepare_command(
             'Execute: implement minimal changes within scope',
             'Verify: run validation commands and tests',
         ],
-        verification=[
-            'uv run godotter runtime validate-structure',
-            'uv run godotter runtime validate-managers',
-            'uv run godotter runtime validate-paths',
-            'uv run godotter runtime lint --project .',
-            'uv run godotter runtime test --project . --pattern "*_smoke.tscn;*_harness.tscn" --timeout 30',
-        ],
+        verification=['uv run godotter runtime verify'],
     )
     out_path = write_workpack(root, pack)
     typer.echo(f'workpack={out_path.as_posix()}')
@@ -185,11 +194,12 @@ def task_scout_command(
         'Obey Godotter dev-mode docs under Docs/.',
         'Levels must have a root Managers node and a Managers/EventBus child.',
         'Prefer structured events via EventBus; avoid implicit get-from-group lookups outside Managers.',
-        'Run `godotter runtime validate-structure`, `godotter runtime validate-managers`, and `godotter runtime validate-paths` after changes.',
+        'Run `godotter runtime verify` after changes; use lower-level runtime validators only for diagnosis.',
     ]
     relevant: list[WorkPackFileRef] = [
         WorkPackFileRef(path='Docs/godotter_dev_mode_project_structure.md', reason='Dev-mode conventions', priority=10),
         WorkPackFileRef(path='Docs/godotter_template_project.md', reason='Template conventions', priority=20),
+        WorkPackFileRef(path='Docs/testing_strategy.md', reason='Testing strategy', priority=25),
     ]
     relevant.extend(scout.relevant_files)
 
@@ -208,13 +218,7 @@ def task_scout_command(
             'Execute: implement minimal changes within scope',
             'Verify: run validation commands and tests',
         ],
-        verification=[
-            'uv run godotter runtime validate-structure',
-            'uv run godotter runtime validate-managers',
-            'uv run godotter runtime validate-paths',
-            'uv run godotter runtime lint --project .',
-            'uv run godotter runtime test --project . --pattern "*_smoke.tscn;*_harness.tscn" --timeout 30',
-        ],
+        verification=['uv run godotter runtime verify'],
     )
     out_path = write_workpack(root, pack)
     typer.echo(f'workpack={out_path.as_posix()}')
@@ -338,23 +342,38 @@ def task_run_command(
     last_signature: str | None = None
     same_failure_count = 0
     failure_report: str | None = None
+    run_state, run_state_path = create_runstate(
+        workspace_root=settings.workspace_root.resolve(),
+        workpack_path=workpack_path.resolve(),
+        task_id=pack.task_id,
+        goal=pack.goal,
+        mode=normalized_mode,
+    )
+    typer.echo(f'runstate={run_state_path.as_posix()}')
 
     attempts = max_attempts if normalized_mode == 'act' else 1
-    for attempt in range(1, attempts + 1):
+    for attempt_index in range(1, attempts + 1):
+        run_attempt = append_attempt(run_state, attempt_index)
+        write_runstate(settings.workspace_root.resolve(), run_state)
         attempt_prompt = list(prompt_lines)
         if failure_report:
             attempt_prompt.extend(
                 [
                     '',
-                    f'Previous attempt failed (attempt={attempt - 1}). Fix the failure and re-run verification.',
+                    f'Previous attempt failed (attempt={attempt_index - 1}). Fix the failure and re-run verification.',
                     'Failure summary:',
                     failure_report,
                 ]
             )
 
         agent_output = agent.handle_input('\n'.join(attempt_prompt))
+        run_attempt.agent_output = agent_output
+        write_runstate(settings.workspace_root.resolve(), run_state)
         typer.echo(agent_output)
         if normalized_mode != 'act':
+            finish_attempt(run_state, run_attempt, status='pass')
+            finish_runstate(run_state, status='pass')
+            write_runstate(settings.workspace_root.resolve(), run_state)
             return
 
         _maybe_apply_unified_diff(settings.workspace_root.resolve(), agent_output)
@@ -368,6 +387,7 @@ def task_run_command(
         except typer.Exit as exc:
             _dump_task_debug(agent)
             failure_report = f'audit_failed={type(exc).__name__}'
+            run_attempt.changed_files = _task_changed_paths(settings.workspace_root.resolve())
             signature = hashlib.sha256(failure_report.encode('utf-8', errors='replace')).hexdigest()
             if stop_on_same_failure and signature == last_signature:
                 same_failure_count += 1
@@ -375,14 +395,53 @@ def task_run_command(
                 same_failure_count = 1
                 last_signature = signature
             if stop_on_same_failure and same_failure_count >= same_failure_limit:
+                verify_report = _record_failure_verify_report(
+                    settings.workspace_root.resolve(),
+                    source={'command': 'task run', 'task_id': pack.task_id, 'reason': 'audit_failed'},
+                )
+                finish_attempt(
+                    run_state,
+                    run_attempt,
+                    status='fail',
+                    failure_report=failure_report,
+                    verify_report=verify_report.as_posix() if verify_report else None,
+                )
+                finish_runstate(run_state, status='fail')
+                write_runstate(settings.workspace_root.resolve(), run_state)
                 raise
-            if attempt >= attempts:
+            if attempt_index >= attempts:
+                verify_report = _record_failure_verify_report(
+                    settings.workspace_root.resolve(),
+                    source={'command': 'task run', 'task_id': pack.task_id, 'reason': 'audit_failed'},
+                )
+                finish_attempt(
+                    run_state,
+                    run_attempt,
+                    status='fail',
+                    failure_report=failure_report,
+                    verify_report=verify_report.as_posix() if verify_report else None,
+                )
+                finish_runstate(run_state, status='fail')
+                write_runstate(settings.workspace_root.resolve(), run_state)
                 raise
+            finish_attempt(run_state, run_attempt, status='retry', failure_report=failure_report)
+            write_runstate(settings.workspace_root.resolve(), run_state)
             continue
 
+        run_attempt.changed_files = _task_changed_paths(settings.workspace_root.resolve())
+        write_runstate(settings.workspace_root.resolve(), run_state)
         ok, failure_report, signature = _run_task_verification_commands(settings.workspace_root.resolve(), pack.verification)
         if ok:
+            finish_attempt(run_state, run_attempt, status='pass')
+            finish_runstate(run_state, status='pass')
+            write_runstate(settings.workspace_root.resolve(), run_state)
             return
+
+        verify_report = _record_failure_verify_report(
+            settings.workspace_root.resolve(),
+            source={'command': 'task run', 'task_id': pack.task_id, 'reason': 'verification_failed'},
+            allow_existing=any('runtime verify' in command.lower() for command in pack.verification),
+        )
 
         if stop_on_same_failure and signature == last_signature:
             same_failure_count += 1
@@ -391,9 +450,35 @@ def task_run_command(
             last_signature = signature
         if stop_on_same_failure and same_failure_count >= same_failure_limit:
             typer.echo('task_run_retry_stop_reason=same_failure_repeated')
+            finish_attempt(
+                run_state,
+                run_attempt,
+                status='fail',
+                failure_report=failure_report,
+                verify_report=verify_report.as_posix() if verify_report else None,
+            )
+            finish_runstate(run_state, status='fail')
+            write_runstate(settings.workspace_root.resolve(), run_state)
             raise typer.Exit(1)
-        if attempt >= attempts:
+        if attempt_index >= attempts:
+            finish_attempt(
+                run_state,
+                run_attempt,
+                status='fail',
+                failure_report=failure_report,
+                verify_report=verify_report.as_posix() if verify_report else None,
+            )
+            finish_runstate(run_state, status='fail')
+            write_runstate(settings.workspace_root.resolve(), run_state)
             raise typer.Exit(1)
+        finish_attempt(
+            run_state,
+            run_attempt,
+            status='retry',
+            failure_report=failure_report,
+            verify_report=verify_report.as_posix() if verify_report else None,
+        )
+        write_runstate(settings.workspace_root.resolve(), run_state)
 
 
 @task_app.command('list', help='List WorkPacks under .godotter/workpacks/.')
@@ -662,6 +747,8 @@ def plan_status_command(
     typer.echo(f'updated_at={state.updated_at}')
     for task_id, status in state.task_status.items():
         typer.echo(f'task id={task_id} status={status}')
+        for key, value in state.task_artifacts.get(task_id, {}).items():
+            typer.echo(f'artifact task={task_id} {key}={value}')
 
 
 @plan_app.command('run', help='Run tasks in a PlanPack sequentially (creates WorkPacks and executes them).')
@@ -770,12 +857,8 @@ def plan_run_command(
                 WorkPackFileRef(path=ref.path, reason=ref.reason or 'scout', priority=15) for ref in scoped_scout.relevant_files[:15]
             ]
 
-        verification_commands = _normalize_verification_commands(task.verification) or [
-            'uv run godotter runtime validate-structure',
-            'uv run godotter runtime validate-managers',
-            'uv run godotter runtime validate-paths',
-            'uv run godotter runtime lint --project .',
-        ]
+        verification_commands = _normalize_verification_commands(task.verification) or ['uv run godotter runtime verify']
+        verification_commands = _ensure_scope_test_verification(task.scope, verification_commands)
 
         wp = WorkPack(
             task_id=f'wp_{secrets.token_hex(4)}',
@@ -807,7 +890,11 @@ def plan_run_command(
             )
         except Exception as exc:
             state.task_status[task.id] = 'fail'
-            state.task_artifacts[task.id] = {'error': f'{type(exc).__name__}: {exc}', 'workpack': wp_path.as_posix()}
+            artifacts = {'error': f'{type(exc).__name__}: {exc}', 'workpack': wp_path.as_posix()}
+            verify_report = _latest_verify_report_artifact(root)
+            if verify_report:
+                artifacts['verify_report'] = verify_report
+            state.task_artifacts[task.id] = artifacts
             state.updated_at = datetime.now().isoformat(timespec='seconds')
             write_planstate(state_path, state)
             if continue_on_fail:
@@ -925,6 +1012,62 @@ def scene_create_command(
     typer.echo(f'uid={result.uid}')
 
 
+@test_app.command('create', help='Create a test harness scene and paired test script.')
+def test_create_command(
+    name: str = typer.Argument(..., help='Test name, e.g. inventory, pickup_flow, main_menu_flow.'),
+    kind: str = typer.Option(
+        'feature',
+        '--kind',
+        help='Test kind: system, feature, integration, level-smoke, e2e.',
+    ),
+    force: bool = typer.Option(False, '--force', help='Overwrite existing files if they already exist.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    _scaffold_test_command(name=name, kind=kind, force=force, workspace=workspace)
+
+
+@scaffold_app.command('test', help='Create a test harness scene and paired test script.')
+def scaffold_test_command(
+    name: str = typer.Argument(..., help='Test name, e.g. inventory, pickup_flow, main_menu_flow.'),
+    kind: str = typer.Option(
+        'feature',
+        '--kind',
+        help='Test kind: system, feature, integration, level-smoke, e2e.',
+    ),
+    force: bool = typer.Option(False, '--force', help='Overwrite existing files if they already exist.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    _scaffold_test_command(name=name, kind=kind, force=force, workspace=workspace)
+
+
+def _scaffold_test_command(
+    *,
+    name: str,
+    kind: str,
+    force: bool,
+    workspace: Path | None,
+) -> None:
+    settings = get_settings()
+    root = (workspace or settings.workspace_root).resolve()
+    try:
+        result = scaffold_test(workspace_root=root, name=name, kind=kind, force=force)
+    except ValueError as exc:
+        typer.echo(f'Error: {exc}')
+        raise typer.Exit(1) from exc
+    typer.echo(f'kind={result.kind}')
+    typer.echo(f'scene={result.scene_path.relative_to(root).as_posix()}')
+    typer.echo(f'script={result.script_path.relative_to(root).as_posix()}')
+    typer.echo(f'uid={result.uid}')
+
+
 @app.command('new', hidden=True)
 def new_command(
     name: str = typer.Argument('.', help='Project name or path. Use "." for current directory.'),
@@ -1005,6 +1148,10 @@ def _audit_task_run_changes(
     )
     touches_tests = any(path.startswith('tests/') for path in changed_paths)
     touches_levels = any(path.startswith('game/levels/') for path in changed_paths)
+    expected_test_dirs = expected_test_dirs_for_paths(changed_paths)
+    missing_expected_tests = [
+        test_dir for test_dir in expected_test_dirs if not any(path.startswith(test_dir) for path in changed_paths)
+    ]
 
     if touches_feature_or_system and not touches_tests:
         if strict:
@@ -1012,11 +1159,16 @@ def _audit_task_run_changes(
             raise typer.Exit(1)
         typer.echo('task_run_audit_warn=missing_tests_for_game_logic_changes')
 
-    if touches_feature_or_system and not touches_levels:
+    if missing_expected_tests:
+        message = ','.join(missing_expected_tests)
         if strict:
-            typer.echo('task_run_audit_error=missing_level_updates_for_game_logic_changes')
+            typer.echo(f'task_run_audit_error=missing_expected_test_layer dirs={message}')
             raise typer.Exit(1)
-        typer.echo('task_run_audit_warn=missing_level_updates_for_game_logic_changes')
+        typer.echo(f'task_run_audit_warn=missing_expected_test_layer dirs={message}')
+
+
+def _task_changed_paths(workspace_root: Path) -> list[str]:
+    return [ref.path for ref in collect_changed_files(workspace_root) if not ref.path.startswith('.godotter/')]
 
 
 def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -> tuple[bool, str | None, str]:
@@ -1062,6 +1214,44 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
 
     signature = hashlib.sha256(b'OK').hexdigest()
     return True, None, signature
+
+
+def _record_failure_verify_report(
+    workspace_root: Path,
+    *,
+    source: dict[str, object],
+    allow_existing: bool = False,
+) -> Path | None:
+    latest_path = latest_verify_report_path(workspace_root)
+    if allow_existing and latest_path.exists():
+        typer.echo(f'task_run_verify_report={latest_path.as_posix()}')
+        return latest_path
+    try:
+        _report, path = run_verify(workspace_root, source=source)
+    except Exception as exc:
+        typer.echo(f'task_run_verify_report_error={type(exc).__name__}: {exc}')
+        return latest_path if latest_path.exists() else None
+    typer.echo(f'task_run_verify_report={path.as_posix()}')
+    return path
+
+
+def _latest_verify_report_artifact(workspace_root: Path) -> str | None:
+    path = latest_verify_report_path(workspace_root)
+    if path.exists():
+        return path.as_posix()
+    return None
+
+
+def _ensure_scope_test_verification(scope: list[str], commands: list[str]) -> list[str]:
+    normalized = list(commands)
+    existing = '\n'.join(normalized).lower()
+    if 'runtime verify' in existing:
+        return normalized
+    for kind in infer_test_kinds_for_paths(scope):
+        command = f'uv run godotter runtime test --project . --kind {kind}'
+        if command.lower() not in existing:
+            normalized.append(command)
+    return normalized
 
 
 def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
@@ -1335,6 +1525,11 @@ def runtime_test_command(
         '--pattern',
         help='Semicolon-separated glob patterns to match test scenes under tests/.',
     ),
+    kind: str | None = typer.Option(
+        None,
+        '--kind',
+        help='Test kind preset: unit, system, feature, integration, level-smoke, e2e, all. Overrides --pattern.',
+    ),
     timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for each test scene.'),
     project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
     include_core_harness: bool = typer.Option(
@@ -1371,6 +1566,12 @@ def runtime_test_command(
         if result.exit_code != 0 or result.timed_out or marker_hit:
             raise typer.Exit(1)
         return
+
+    if kind:
+        try:
+            pattern = test_kind_pattern(kind)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
     patterns = [p.strip().strip('"').strip("'") for p in pattern.split(';') if p.strip()]
     scenes: list[Path] = []
@@ -1409,6 +1610,44 @@ def runtime_test_command(
         typer.echo(f'failures={len(failures)}')
         for s in failures[:25]:
             typer.echo(f'failure={s}')
+        raise typer.Exit(1)
+
+
+@runtime_app.command('verify', help='Run standard validation/lint/tests and write a VerifyReport JSON.')
+def runtime_verify_command(
+    project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    json_output: Path | None = typer.Option(
+        None,
+        '--json-output',
+        help='Write VerifyReport JSON to this path (relative paths are resolved under the project root).',
+    ),
+    timeout: int = typer.Option(300, '--timeout', min=1, help='Timeout in seconds for each verification command.'),
+    fail_fast: bool = typer.Option(
+        False,
+        '--fail-fast/--no-fail-fast',
+        help='Stop after the first failed check instead of collecting all check results.',
+    ),
+) -> None:
+    settings = get_settings()
+    target = resolve_runtime_target(settings, project=project)
+    report, path = run_verify(
+        target.workspace_root,
+        output_path=json_output,
+        timeout=timeout,
+        fail_fast=fail_fast,
+        source={'command': 'runtime verify', 'project': project},
+    )
+    typer.echo(f'report={path.as_posix()}')
+    typer.echo(f'result={report["result"]}')
+    for check in report['checks']:
+        typer.echo(
+            'check '
+            f'name={check["name"]} '
+            f'result={check["result"]} '
+            f'exit_code={check["exit_code"]} '
+            f'timed_out={str(check["timed_out"]).lower()}'
+        )
+    if report['result'] != 'pass':
         raise typer.Exit(1)
 
 
