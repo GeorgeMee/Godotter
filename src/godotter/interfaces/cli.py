@@ -886,6 +886,7 @@ def plan_run_command(
         typer.echo(f'workpack={wp_path.as_posix()} task_id={task.id} title={task.title}')
 
         # Execute workpack using existing task runner logic (same process).
+        task_started_at = datetime.now()
         try:
             task_run_command(
                 workpack=wp_path,
@@ -902,7 +903,7 @@ def plan_run_command(
         except Exception as exc:
             state.task_status[task.id] = 'fail'
             artifacts = {'error': f'{type(exc).__name__}: {exc}', 'workpack': wp_path.as_posix()}
-            verify_report = _latest_verify_report_artifact(root)
+            verify_report = _latest_verify_report_artifact(root, since=task_started_at)
             if verify_report:
                 artifacts['verify_report'] = verify_report
             state.task_artifacts[task.id] = artifacts
@@ -1319,22 +1320,30 @@ def _record_failure_verify_report(
 ) -> Path | None:
     latest_path = latest_verify_report_path(workspace_root)
     if allow_existing and latest_path.exists():
-        typer.echo(f'task_run_verify_report={latest_path.as_posix()}')
-        return latest_path
+        typer.echo(f'task_run_verify_report_stale_ignored={latest_path.as_posix()}')
     try:
         _report, path = run_verify(workspace_root, source=source)
     except Exception as exc:
         typer.echo(f'task_run_verify_report_error={type(exc).__name__}: {exc}')
-        return latest_path if latest_path.exists() else None
+        return None
     typer.echo(f'task_run_verify_report={path.as_posix()}')
     return path
 
 
-def _latest_verify_report_artifact(workspace_root: Path) -> str | None:
+def _latest_verify_report_artifact(workspace_root: Path, *, since: datetime | None = None) -> str | None:
     path = latest_verify_report_path(workspace_root)
-    if path.exists():
-        return path.as_posix()
-    return None
+    if not path.exists():
+        return None
+    if since is not None and path.stat().st_mtime < since.timestamp():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    report_root = str(payload.get('workspace_root') or '')
+    if report_root and Path(report_root).resolve() != workspace_root.resolve():
+        return None
+    return path.as_posix()
 
 
 def _ensure_scope_test_verification(scope: list[str], commands: list[str]) -> list[str]:
@@ -1367,6 +1376,8 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
         return 'uv run godotter runtime lint --project .'
     if raw == 'uv run godotter runtime lint --project . clean':
         return 'uv run godotter runtime lint --project .'
+    if raw.startswith('uv run godotter runtime verify ') and (' --kind ' in raw or ' --name ' in raw):
+        return 'uv run godotter runtime verify'
 
     # Fix common case: planner uses bare filename for runtime lint.
     prefix = 'uv run godotter runtime lint --project . '

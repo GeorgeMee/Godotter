@@ -176,6 +176,75 @@ def _safe_git_relpath(value: str) -> str:
     return text
 
 
+def _safe_project_relpath(value: str) -> str:
+    text = value.strip().replace('\\', '/')
+    if not text:
+        return ''
+    if text.startswith('/') or '..' in Path(text).parts:
+        raise HTTPException(status_code=400, detail='invalid_project_path')
+    return text
+
+
+def _project_tree(
+    workspace_root: Path,
+    rel_path: str = '',
+    *,
+    max_depth: int = 3,
+    max_entries: int = 300,
+) -> dict[str, object]:
+    safe_rel = _safe_project_relpath(rel_path)
+    root = workspace_root.resolve()
+    target = (root / safe_rel).resolve()
+    if target != root and root not in target.parents:
+        raise HTTPException(status_code=400, detail='path_outside_project')
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail='directory_not_found')
+    counter = {'count': 0, 'truncated': False}
+
+    def walk(path: Path, depth: int) -> dict[str, object]:
+        counter['count'] += 1
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            relative = ''
+        node: dict[str, object] = {
+            'name': path.name or root.name,
+            'path': relative,
+            'kind': 'directory' if path.is_dir() else 'file',
+        }
+        if path.is_file():
+            node['size'] = path.stat().st_size
+            return node
+        if depth <= 0 or counter['count'] >= max_entries:
+            node['children'] = []
+            node['truncated'] = True
+            counter['truncated'] = True
+            return node
+        children: list[dict[str, object]] = []
+        for child in sorted(path.iterdir(), key=lambda item: (item.is_file(), item.name.lower())):
+            if child.name in {'.git', '.godotter', '.import', '.venv', '__pycache__'}:
+                continue
+            if child.name == '.gitkeep':
+                continue
+            if child.name.endswith('.uid'):
+                continue
+            if counter['count'] >= max_entries:
+                counter['truncated'] = True
+                break
+            children.append(walk(child, depth - 1))
+        node['children'] = children
+        return node
+
+    return {
+        'root': root.as_posix(),
+        'path': safe_rel,
+        'max_depth': max_depth,
+        'max_entries': max_entries,
+        'truncated': counter['truncated'],
+        'tree': walk(target, max(0, max_depth)),
+    }
+
+
 def _git_status_summary(workspace_root: Path) -> dict[str, object]:
     if not (workspace_root / '.git').exists():
         return {
@@ -1203,6 +1272,14 @@ def project_summary(name: str, request: Request) -> dict[str, object]:
         'latest_plan': _latest_json(plans_dir),
         'latest_workpack': _latest_json(workpacks_dir),
     }
+
+
+@app.get('/api/projects/{name}/tree')
+def project_tree(name: str, request: Request, path: str = '', max_depth: int = 3) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    depth = max(0, min(max_depth, 8))
+    return {'ok': True, 'name': name, **_project_tree(root, path, max_depth=depth)}
 
 
 @app.get('/api/projects/{name}/plans')

@@ -12,6 +12,7 @@ def test_web_health_importable():
             _find_active_run_for_review,
             _run_process_key,
             _safe_git_relpath,
+            _project_tree,
             _list_runs,
             _read_run_events,
             _session_detail,
@@ -33,6 +34,7 @@ def test_web_health_importable():
     assert state['ok'] is True
     assert state['workflow']['default_mode'] == 'plan-first'
     assert _safe_git_relpath('src/app.gd') == 'src/app.gd'
+    assert callable(_project_tree)
     assert isinstance(projects_get(_FakeRequest()), str)
     projects = projects_list(_FakeRequest())
     assert projects['ok'] is True
@@ -153,6 +155,41 @@ def test_git_status_summary_handles_non_repo(tmp_path):
     summary = _git_status_summary(tmp_path)
     assert summary['is_repo'] is False
     assert summary['files'] == []
+
+
+def test_project_tree_helper_filters_noise_files(tmp_path):
+    try:
+        from godotter_web.app import _project_tree
+    except ModuleNotFoundError:
+        return
+
+    (tmp_path / 'game' / 'levels').mkdir(parents=True)
+    (tmp_path / 'game' / 'levels' / 'main.tscn').write_text('[gd_scene]', encoding='utf-8')
+    (tmp_path / 'game' / 'levels' / 'main.tscn.uid').write_text('uid://demo', encoding='utf-8')
+    (tmp_path / 'game' / 'levels' / '.gitkeep').write_text('', encoding='utf-8')
+    (tmp_path / '.godotter').mkdir()
+    (tmp_path / '.godotter' / 'hidden.json').write_text('{}', encoding='utf-8')
+
+    result = _project_tree(tmp_path, max_depth=3)
+    payload = str(result['tree'])
+    assert 'main.tscn' in payload
+    assert 'main.tscn.uid' not in payload
+    assert '.gitkeep' not in payload
+    assert '.godotter' not in payload
+
+
+def test_project_tree_frontend_controls_are_present():
+    from pathlib import Path
+
+    html = Path('src/godotter_web/static/index.html').read_text(encoding='utf-8')
+    script = Path('src/godotter_web/static/app.js').read_text(encoding='utf-8')
+    assert 'data-view="files"' in html
+    assert 'id="tree-list"' in html
+    assert 'id="tree-refresh"' in html
+    assert 'id="tree-depth"' in html
+    assert 'async function loadProjectTree' in script
+    assert 'function treeNodeHtml(node)' in script
+    assert '/tree?path=' in script
 
 
 def test_web_build_list_and_download_helpers(tmp_path):

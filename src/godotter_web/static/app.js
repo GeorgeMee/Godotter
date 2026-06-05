@@ -7,6 +7,7 @@ let nextRunEventIndex = 0;
 let activeView = "chat";
 let taskRuntimeStatus = {};
 let taskRuntimeRunId = null;
+let currentTreePath = "";
 
 async function fetchJson(path, options = {}) {
   const response = await fetch(path, options);
@@ -37,7 +38,7 @@ function showView(view) {
   } else if (view === "run") {
     view = "log";
   }
-  const allowed = new Set(["chat", "task", "log", "build", "git"]);
+  const allowed = new Set(["chat", "task", "log", "build", "git", "files"]);
   activeView = allowed.has(view) ? view : "chat";
   for (const button of document.querySelectorAll("[data-view]")) {
     const isActive = button.dataset.view === activeView;
@@ -82,6 +83,7 @@ async function loadState() {
     await loadSavedSession();
     await loadBuilds();
     await loadGitStatus();
+    await loadProjectTree();
   } catch (error) {
     workspace.textContent = "无法读取工作区";
     status.textContent = `错误：${error.message}`;
@@ -350,6 +352,60 @@ async function submitGitCommit(event) {
   } catch (error) {
     summary.textContent = `git_commit_error ${error.message}`;
   }
+}
+
+async function loadProjectTree(path = currentTreePath) {
+  const status = document.getElementById("tree-status");
+  const list = document.getElementById("tree-list");
+  const pathLabel = document.getElementById("tree-path");
+  const depth = document.getElementById("tree-depth")?.value || "3";
+  if (!status || !list || !pathLabel || !currentProject) {
+    return;
+  }
+  currentTreePath = path || "";
+  status.textContent = "Loading";
+  pathLabel.textContent = currentTreePath ? `res://${currentTreePath}` : "res://";
+  try {
+    const result = await fetchJson(
+      `/api/projects/${encodeURIComponent(currentProject)}/tree?path=${encodeURIComponent(currentTreePath)}&max_depth=${encodeURIComponent(depth)}`,
+    );
+    status.textContent = result.truncated ? "Truncated" : "Loaded";
+    list.innerHTML = treeNodeHtml(result.tree);
+    for (const button of list.querySelectorAll("[data-tree-path]")) {
+      button.addEventListener("click", () => loadProjectTree(button.dataset.treePath || ""));
+    }
+  } catch (error) {
+    status.textContent = "Failed";
+    list.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function treeNodeHtml(node) {
+  if (!node) {
+    return '<p class="muted">Empty tree.</p>';
+  }
+  const isDir = node.kind === "directory";
+  const icon = isDir ? "📁" : "📄";
+  const size = !isDir && node.size !== undefined ? ` <span class="muted">${formatBytes(node.size)}</span>` : "";
+  const openButton = isDir && node.path
+    ? `<button type="button" class="secondary" data-tree-path="${escapeHtml(node.path)}">Open</button>`
+    : "";
+  const children = (node.children || []).length
+    ? `<div class="tree-children">${node.children.map((child) => treeNodeHtml(child)).join("")}</div>`
+    : "";
+  const truncated = node.truncated ? ' <span class="muted">(truncated)</span>' : "";
+  return `
+    <div class="tree-node">
+      <div class="tree-row">
+        <span>${icon}</span>
+        <code title="${escapeHtml(node.path || "")}">${escapeHtml(node.name || "(root)")}</code>
+        ${size}
+        ${truncated}
+        ${openButton}
+      </div>
+      ${children}
+    </div>
+  `;
 }
 
 async function loadSavedSession() {
@@ -1023,6 +1079,9 @@ document.getElementById("git-fetch").addEventListener("click", () => runGitActio
 document.getElementById("git-pull").addEventListener("click", () => runGitAction("pull"));
 document.getElementById("git-push").addEventListener("click", () => runGitAction("push"));
 document.getElementById("git-commit-form").addEventListener("submit", submitGitCommit);
+document.getElementById("tree-refresh").addEventListener("click", () => loadProjectTree());
+document.getElementById("tree-root").addEventListener("click", () => loadProjectTree(""));
+document.getElementById("tree-depth").addEventListener("change", () => loadProjectTree());
 
 setupViewTabs();
 loadState();

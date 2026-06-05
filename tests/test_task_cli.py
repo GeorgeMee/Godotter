@@ -3,12 +3,43 @@ import subprocess
 
 from typer.testing import CliRunner
 
-from godotter.interfaces.cli import app
+from godotter.interfaces.cli import app, _record_failure_verify_report, _rewrite_verification_command
 from godotter.tasks.runstate import load_runstate
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, write_workpack
 
 
 runner = CliRunner()
+
+
+def test_rewrite_runtime_verify_drops_invalid_kind_and_name_flags(tmp_path):
+    command = _rewrite_verification_command(
+        tmp_path,
+        'uv run godotter runtime verify --kind feature --name snake_movement_basic',
+    )
+
+    assert command == 'uv run godotter runtime verify'
+
+
+def test_record_failure_verify_report_does_not_return_stale_latest(monkeypatch, tmp_path):
+    report_dir = tmp_path / '.godotter' / 'reports' / 'verify'
+    report_dir.mkdir(parents=True)
+    latest = report_dir / 'latest.json'
+    latest.write_text(
+        '{"workspace_root":"D:/Godots/Engines/Godotter/templates/godotter_game_template","result":"pass"}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.run_verify',
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('verify unavailable')),
+    )
+
+    result = _record_failure_verify_report(
+        tmp_path,
+        source={'command': 'task run', 'reason': 'verification_failed'},
+        allow_existing=True,
+    )
+
+    assert result is None
 
 
 def _init_git_repo(path: Path) -> None:

@@ -33,6 +33,7 @@
           <a class="view-tab" href="#log" data-view="log">Log</a>
           <a class="view-tab" href="#build" data-view="build">Build</a>
           <a class="view-tab" href="#git" data-view="git">Git</a>
+          <a class="view-tab" href="#files" data-view="files">Files</a>
         </nav>
         <p class="view-current">当前界面：<strong id="current-view-label">Chat</strong></p>
       </header>
@@ -166,6 +167,32 @@
           </div>
           <h3>Recent commits</h3>
           <pre class="log git-log" id="git-log">暂无。</pre>
+        </article>
+
+        <article class="panel files-panel is-hidden" data-panel="files">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Files</p>
+              <h2>项目目录结构</h2>
+              <p class="subtle">查看当前游戏项目目录；默认隐藏 .git、.godotter、.import、.uid 等噪音文件。</p>
+            </div>
+            <span class="badge green" id="tree-status">未读取</span>
+          </div>
+          <div class="button-row tree-actions">
+            <button type="button" id="tree-refresh">刷新目录</button>
+            <button type="button" class="secondary" id="tree-root">回到根目录</button>
+            <label>
+              <span>深度</span>
+              <select id="tree-depth">
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted" id="tree-path">res://</p>
+          <div class="tree-list" id="tree-list">等待读取目录。</div>
         </article>
       </section>
     </main>
