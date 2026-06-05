@@ -37,7 +37,7 @@ function showView(view) {
   } else if (view === "run") {
     view = "log";
   }
-  const allowed = new Set(["chat", "task", "log", "build"]);
+  const allowed = new Set(["chat", "task", "log", "build", "git"]);
   activeView = allowed.has(view) ? view : "chat";
   for (const button of document.querySelectorAll("[data-view]")) {
     const isActive = button.dataset.view === activeView;
@@ -81,6 +81,7 @@ async function loadState() {
     workspace.title = selected.workspace_root || "";
     await loadSavedSession();
     await loadBuilds();
+    await loadGitStatus();
   } catch (error) {
     workspace.textContent = "无法读取工作区";
     status.textContent = `错误：${error.message}`;
@@ -207,6 +208,148 @@ function formatBytes(value) {
     return `${(size / 1024).toFixed(1)} KB`;
   }
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadGitStatus() {
+  const status = document.getElementById("git-status");
+  const summary = document.getElementById("git-summary");
+  const files = document.getElementById("git-files");
+  const log = document.getElementById("git-log");
+  if (!status || !summary || !files || !log || !currentProject) {
+    return;
+  }
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/git/status`);
+    renderGitStatus(result.git);
+  } catch (error) {
+    status.textContent = "Git unavailable";
+    summary.textContent = error.message;
+    files.innerHTML = "";
+    log.textContent = "";
+  }
+}
+
+function renderGitStatus(git) {
+  const status = document.getElementById("git-status");
+  const summary = document.getElementById("git-summary");
+  const files = document.getElementById("git-files");
+  const log = document.getElementById("git-log");
+  if (!git.is_repo) {
+    status.textContent = "Not a Git repo";
+    summary.textContent = "当前游戏项目还没有 .git。可以点击 Init Git 初始化项目仓库。";
+    files.innerHTML = '<p class="muted">No Git repository.</p>';
+    log.textContent = "";
+    return;
+  }
+  const changes = git.files || [];
+  status.textContent = changes.length ? `${changes.length} changes` : "Clean";
+  summary.textContent = [
+    `branch=${git.branch || "(unknown)"}`,
+    git.upstream ? `upstream=${git.upstream}` : "",
+    git.branch_line || "",
+  ].filter(Boolean).join(" · ");
+  files.innerHTML = changes.length
+    ? changes.map((file) => gitFileHtml(file)).join("")
+    : '<p class="muted">No working tree changes.</p>';
+  log.textContent = (git.recent_commits || []).join("\n") || "No commits.";
+  for (const button of files.querySelectorAll("[data-diff-path]")) {
+    button.addEventListener("click", () => loadGitDiff(button.dataset.diffPath || ""));
+  }
+}
+
+function gitFileHtml(file) {
+  const path = file.path || "";
+  const code = file.code || "";
+  return `
+    <label class="git-file-row">
+      <input type="checkbox" value="${escapeHtml(path)}" />
+      <span class="status-pill">${escapeHtml(code)}</span>
+      <code title="${escapeHtml(path)}">${escapeHtml(path)}</code>
+      <button type="button" class="secondary" data-diff-path="${escapeHtml(path)}">Diff</button>
+    </label>
+  `;
+}
+
+async function loadGitDiff(path = "") {
+  const diff = document.getElementById("git-diff");
+  if (!currentProject || !diff) {
+    return;
+  }
+  diff.textContent = "Loading diff...";
+  try {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/git/diff${query}`);
+    diff.textContent = result.diff?.stdout || "(empty diff)";
+  } catch (error) {
+    diff.textContent = `diff_error ${error.message}`;
+  }
+}
+
+async function runGitAction(action) {
+  const summary = document.getElementById("git-summary");
+  if (!currentProject || !summary) {
+    return;
+  }
+  summary.textContent = `Running git ${action}...`;
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/git/${action}`, {method: "POST"});
+    renderGitStatus(result.git);
+    document.getElementById("git-diff").textContent = [
+      result.result?.stdout || "",
+      result.result?.stderr || "",
+    ].filter(Boolean).join("\n") || `git ${action} finished`;
+  } catch (error) {
+    summary.textContent = `git_${action}_error ${error.message}`;
+  }
+}
+
+async function initGitRepo() {
+  const summary = document.getElementById("git-summary");
+  if (!currentProject || !summary) {
+    return;
+  }
+  summary.textContent = "Running git init...";
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/git/init`, {method: "POST"});
+    renderGitStatus(result.git);
+    document.getElementById("git-diff").textContent = (result.results || []).map((item) => [
+      `$ ${item.args.join(" ")}`,
+      item.stdout || "",
+      item.stderr || "",
+    ].filter(Boolean).join("\n")).join("\n\n") || "git repo already exists";
+  } catch (error) {
+    summary.textContent = `git_init_error ${error.message}`;
+  }
+}
+
+async function submitGitCommit(event) {
+  event.preventDefault();
+  const messageInput = document.getElementById("git-commit-message");
+  const summary = document.getElementById("git-summary");
+  const files = Array.from(document.querySelectorAll("#git-files input[type='checkbox']:checked")).map((item) => item.value);
+  const message = messageInput.value.trim();
+  if (!message || !files.length) {
+    summary.textContent = "Commit requires a message and at least one selected file.";
+    return;
+  }
+  summary.textContent = "Running git commit...";
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/git/commit`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({message, files}),
+    });
+    renderGitStatus(result.git);
+    document.getElementById("git-diff").textContent = [
+      result.result?.stdout || "",
+      result.result?.stderr || "",
+    ].filter(Boolean).join("\n") || "git commit finished";
+    if (result.ok) {
+      messageInput.value = "";
+    }
+  } catch (error) {
+    summary.textContent = `git_commit_error ${error.message}`;
+  }
 }
 
 async function loadSavedSession() {
@@ -874,6 +1017,12 @@ document.getElementById("cancel-run").addEventListener("click", async () => {
 document.getElementById("build-form").addEventListener("submit", submitBuild);
 document.getElementById("build-doctor").addEventListener("click", runBuildDoctor);
 document.getElementById("build-refresh").addEventListener("click", loadBuilds);
+document.getElementById("git-refresh").addEventListener("click", loadGitStatus);
+document.getElementById("git-init").addEventListener("click", initGitRepo);
+document.getElementById("git-fetch").addEventListener("click", () => runGitAction("fetch"));
+document.getElementById("git-pull").addEventListener("click", () => runGitAction("pull"));
+document.getElementById("git-push").addEventListener("click", () => runGitAction("push"));
+document.getElementById("git-commit-form").addEventListener("submit", submitGitCommit);
 
 setupViewTabs();
 loadState();

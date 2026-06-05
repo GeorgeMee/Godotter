@@ -11,6 +11,7 @@ def test_web_health_importable():
             _create_session,
             _find_active_run_for_review,
             _run_process_key,
+            _safe_git_relpath,
             _list_runs,
             _read_run_events,
             _session_detail,
@@ -31,6 +32,7 @@ def test_web_health_importable():
     state = chat_state()
     assert state['ok'] is True
     assert state['workflow']['default_mode'] == 'plan-first'
+    assert _safe_git_relpath('src/app.gd') == 'src/app.gd'
     assert isinstance(projects_get(_FakeRequest()), str)
     projects = projects_list(_FakeRequest())
     assert projects['ok'] is True
@@ -105,6 +107,52 @@ def test_build_download_frontend_and_api(tmp_path):
     assert 'document.getElementById("build-form").addEventListener("submit", submitBuild)' in script
     assert '/builds/${encodeURIComponent(build.build_id)}/download/' in script
     assert '/builds/doctor' in script
+
+
+def test_git_frontend_controls_are_present():
+    from pathlib import Path
+
+    html = Path('src/godotter_web/static/index.html').read_text(encoding='utf-8')
+    script = Path('src/godotter_web/static/app.js').read_text(encoding='utf-8')
+    assert 'data-view="git"' in html
+    assert 'id="git-refresh"' in html
+    assert 'id="git-init"' in html
+    assert 'id="git-fetch"' in html
+    assert 'id="git-pull"' in html
+    assert 'id="git-push"' in html
+    assert 'id="git-commit-form"' in html
+    assert 'async function loadGitStatus()' in script
+    assert 'async function initGitRepo()' in script
+    assert 'async function submitGitCommit(event)' in script
+    assert '/git/status' in script
+    assert '/git/init' in script
+    assert '/git/commit' in script
+
+
+def test_git_path_validation_rejects_parent_paths():
+    try:
+        from fastapi import HTTPException
+        from godotter_web.app import _safe_git_relpath
+    except ModuleNotFoundError:
+        return
+
+    try:
+        _safe_git_relpath('../secret.txt')
+    except HTTPException as exc:
+        assert exc.status_code == 400
+    else:
+        raise AssertionError('expected invalid git path to be rejected')
+
+
+def test_git_status_summary_handles_non_repo(tmp_path):
+    try:
+        from godotter_web.app import _git_status_summary
+    except ModuleNotFoundError:
+        return
+
+    summary = _git_status_summary(tmp_path)
+    assert summary['is_repo'] is False
+    assert summary['files'] == []
 
 
 def test_web_build_list_and_download_helpers(tmp_path):

@@ -88,7 +88,7 @@ textarea {
 
 .view-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -516,6 +516,52 @@ small {
   gap: 8px;
 }
 
+.git-summary {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--muted);
+  background: #11141a;
+}
+
+.git-layout {
+  display: grid;
+  gap: 14px;
+}
+
+.git-files {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.git-file-row {
+  display: grid;
+  grid-template-columns: auto 52px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: #11141a;
+}
+
+.git-file-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-commit-form {
+  display: grid;
+  gap: 8px;
+}
+
+.git-diff,
+.git-log {
+  min-height: 180px;
+}
+
 @media (min-width: 860px) {
   .shell {
     padding: 24px;
@@ -534,6 +580,10 @@ small {
   .view-tabs {
     grid-column: 1 / -1;
     display: flex;
+  }
+
+  .git-layout {
+    grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr);
   }
 
   .task-title-row {

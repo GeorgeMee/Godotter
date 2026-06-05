@@ -148,6 +148,74 @@ def _project_root_or_404(name: str) -> Path:
     return entry.workspace_root.resolve()
 
 
+def _run_git(workspace_root: Path, args: list[str], *, timeout: int = 30, require_repo: bool = True) -> dict[str, object]:
+    if require_repo and not (workspace_root / '.git').exists():
+        raise HTTPException(status_code=400, detail='workspace_is_not_a_git_repository')
+    completed = subprocess.run(
+        ['git', *args],
+        cwd=workspace_root,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        timeout=timeout,
+    )
+    return {
+        'args': ['git', *args],
+        'exit_code': completed.returncode,
+        'stdout': completed.stdout,
+        'stderr': completed.stderr,
+        'ok': completed.returncode == 0,
+    }
+
+
+def _safe_git_relpath(value: str) -> str:
+    text = value.strip().replace('\\', '/')
+    if not text or text.startswith('/') or '..' in Path(text).parts:
+        raise HTTPException(status_code=400, detail='invalid_git_path')
+    return text
+
+
+def _git_status_summary(workspace_root: Path) -> dict[str, object]:
+    if not (workspace_root / '.git').exists():
+        return {
+            'is_repo': False,
+            'branch': '',
+            'upstream': '',
+            'branch_line': '',
+            'dirty': False,
+            'files': [],
+            'recent_commits': [],
+        }
+    status = _run_git(workspace_root, ['status', '--porcelain=v1', '-b'])
+    log = _run_git(workspace_root, ['log', '--oneline', '-n', '10'])
+    lines = str(status['stdout']).splitlines()
+    branch_line = lines[0] if lines and lines[0].startswith('## ') else ''
+    files = []
+    for line in lines[1:]:
+        if not line:
+            continue
+        files.append(
+            {
+                'code': line[:2],
+                'path': line[3:],
+            }
+        )
+    branch = branch_line[3:].split('...', 1)[0].split(' ', 1)[0] if branch_line else ''
+    upstream = ''
+    if '...' in branch_line:
+        upstream = branch_line.split('...', 1)[1].split(' ', 1)[0]
+    return {
+        'is_repo': True,
+        'branch': branch,
+        'upstream': upstream,
+        'branch_line': branch_line[3:] if branch_line else '',
+        'dirty': bool(files),
+        'files': files,
+        'recent_commits': str(log['stdout']).splitlines() if log['ok'] else [],
+    }
+
+
 def _json_file_summary(path: Path) -> dict[str, object]:
     summary: dict[str, object] = {
         'name': path.name,
@@ -1101,7 +1169,7 @@ async def project_create(request: Request) -> dict[str, object]:
     parent = _default_new_project_parent()
     target = parent / name
     try:
-        result = scaffold_godot_project(str(target), no_git=bool(payload.get('no_git', True)))
+        result = scaffold_godot_project(str(target), no_git=bool(payload.get('no_git', False)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _register_project(name, result.project_path, set_default=bool(payload.get('set_default', True)))
@@ -1111,6 +1179,7 @@ async def project_create(request: Request) -> dict[str, object]:
         'workspace_root': result.project_path.as_posix(),
         'registered': True,
         'is_default': bool(payload.get('set_default', True)),
+        'git_initialized': result.git_initialized,
     }
 
 
@@ -1219,6 +1288,91 @@ def project_build_download(name: str, build_id: str, artifact_path: str, request
     rel_path = f'.godotter/builds/{build_id}/{artifact_path}'
     path = _safe_project_file(root, rel_path)
     return FileResponse(path, filename=path.name)
+
+
+@app.get('/api/projects/{name}/git/status')
+def project_git_status(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    return {'ok': True, 'git': _git_status_summary(root)}
+
+
+@app.post('/api/projects/{name}/git/init')
+def project_git_init(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    if (root / '.git').exists():
+        return {'ok': True, 'already_exists': True, 'git': _git_status_summary(root), 'results': []}
+    results = [
+        _run_git(root, ['init'], require_repo=False),
+        _run_git(root, ['add', '.']),
+        _run_git(root, ['commit', '-m', 'Initial commit: Godot project setup'], timeout=120),
+    ]
+    return {
+        'ok': all(result['ok'] for result in results),
+        'already_exists': False,
+        'results': results,
+        'git': _git_status_summary(root),
+    }
+
+
+@app.get('/api/projects/{name}/git/diff')
+def project_git_diff(name: str, request: Request, path: str = '') -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    args = ['diff', '--']
+    if path.strip():
+        args.append(_safe_git_relpath(path))
+    result = _run_git(root, args)
+    return {'ok': result['ok'], 'diff': result}
+
+
+@app.post('/api/projects/{name}/git/fetch')
+def project_git_fetch(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    result = _run_git(root, ['fetch', '--prune'], timeout=120)
+    return {'ok': result['ok'], 'result': result, 'git': _git_status_summary(root)}
+
+
+@app.post('/api/projects/{name}/git/pull')
+def project_git_pull(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    summary = _git_status_summary(root)
+    if summary['dirty']:
+        raise HTTPException(status_code=409, detail='working_tree_must_be_clean_before_pull')
+    result = _run_git(root, ['pull', '--ff-only'], timeout=120)
+    return {'ok': result['ok'], 'result': result, 'git': _git_status_summary(root)}
+
+
+@app.post('/api/projects/{name}/git/push')
+def project_git_push(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    result = _run_git(root, ['push'], timeout=120)
+    return {'ok': result['ok'], 'result': result, 'git': _git_status_summary(root)}
+
+
+@app.post('/api/projects/{name}/git/commit')
+async def project_git_commit(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    message = str(payload.get('message', '')).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail='commit_message_required')
+    files = [_safe_git_relpath(str(item)) for item in payload.get('files', []) if str(item).strip()]
+    if not files:
+        raise HTTPException(status_code=400, detail='commit_files_required')
+    add_result = _run_git(root, ['add', '--', *files])
+    if not add_result['ok']:
+        return {'ok': False, 'result': add_result, 'git': _git_status_summary(root)}
+    commit_result = _run_git(root, ['commit', '-m', message], timeout=120)
+    return {'ok': commit_result['ok'], 'result': commit_result, 'git': _git_status_summary(root)}
 
 
 @app.get('/api/projects/{name}/sessions')

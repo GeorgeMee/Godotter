@@ -32,6 +32,7 @@
           <a class="view-tab" href="#task" data-view="task">Task</a>
           <a class="view-tab" href="#log" data-view="log">Log</a>
           <a class="view-tab" href="#build" data-view="build">Build</a>
+          <a class="view-tab" href="#git" data-view="git">Git</a>
         </nav>
         <p class="view-current">当前界面：<strong id="current-view-label">Chat</strong></p>
       </header>
@@ -130,6 +131,41 @@
             <p class="muted" id="build-message">需要项目存在 `export_presets.cfg`，且 Godot 已安装对应导出模板。</p>
           </form>
           <div class="build-list" id="build-list"></div>
+        </article>
+
+        <article class="panel git-panel is-hidden" data-panel="git">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Git</p>
+              <h2>版本控制</h2>
+              <p class="subtle">安全 Git 工具：查看状态、查看 diff、提交已选文件、fetch、ff-only pull、push。</p>
+            </div>
+            <span class="badge green" id="git-status">未读取</span>
+          </div>
+          <div class="git-actions button-row">
+            <button type="button" id="git-refresh">刷新</button>
+            <button type="button" class="secondary" id="git-init">Init Git</button>
+            <button type="button" class="secondary" id="git-fetch">Fetch</button>
+            <button type="button" class="secondary" id="git-pull">Pull FF-only</button>
+            <button type="button" class="secondary" id="git-push">Push</button>
+          </div>
+          <div class="git-summary" id="git-summary">等待读取 Git 状态。</div>
+          <div class="git-layout">
+            <section>
+              <h3>Changes</h3>
+              <div class="git-files" id="git-files"></div>
+              <form class="git-commit-form" id="git-commit-form">
+                <textarea id="git-commit-message" rows="2" placeholder="Commit message"></textarea>
+                <button type="submit">Commit selected</button>
+              </form>
+            </section>
+            <section>
+              <h3>Diff</h3>
+              <pre class="log git-diff" id="git-diff">选择文件查看 diff。</pre>
+            </section>
+          </div>
+          <h3>Recent commits</h3>
+          <pre class="log git-log" id="git-log">暂无。</pre>
         </article>
       </section>
     </main>
