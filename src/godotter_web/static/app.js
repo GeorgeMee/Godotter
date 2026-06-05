@@ -37,7 +37,7 @@ function showView(view) {
   } else if (view === "run") {
     view = "log";
   }
-  const allowed = new Set(["chat", "task", "log"]);
+  const allowed = new Set(["chat", "task", "log", "build"]);
   activeView = allowed.has(view) ? view : "chat";
   for (const button of document.querySelectorAll("[data-view]")) {
     const isActive = button.dataset.view === activeView;
@@ -80,10 +80,133 @@ async function loadState() {
     workspace.textContent = `当前工作区：${selected.name}`;
     workspace.title = selected.workspace_root || "";
     await loadSavedSession();
+    await loadBuilds();
   } catch (error) {
     workspace.textContent = "无法读取工作区";
     status.textContent = `错误：${error.message}`;
   }
+}
+
+async function loadBuilds() {
+  const status = document.getElementById("build-status");
+  const list = document.getElementById("build-list");
+  if (!status || !list || !currentProject) {
+    return;
+  }
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/builds`);
+    renderBuilds(result.builds || []);
+  } catch (error) {
+    status.textContent = "读取失败";
+    list.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function runBuildDoctor() {
+  const message = document.getElementById("build-message");
+  if (!currentProject) {
+    message.textContent = "请先选择工作区。";
+    return;
+  }
+  message.textContent = "正在检查导出配置...";
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/builds/doctor`);
+    const doctor = result.doctor || {};
+    const presets = (doctor.presets || []).map((preset) => `${preset.name}(${preset.platform || "unknown"})`).join(", ");
+    const warnings = (doctor.warnings || []).join("；");
+    const errors = (doctor.errors || []).join("；");
+    message.textContent = [
+      `export_presets=${doctor.export_presets_exists ? "yes" : "no"}`,
+      `templates=${doctor.templates_detected ? "yes" : "no"}`,
+      presets ? `presets=${presets}` : "",
+      warnings ? `warnings=${warnings}` : "",
+      errors ? `errors=${errors}` : "",
+    ].filter(Boolean).join(" · ");
+    if ((doctor.presets || []).length && !document.getElementById("build-preset").value.trim()) {
+      document.getElementById("build-preset").value = doctor.presets[0].name || "";
+    }
+  } catch (error) {
+    message.textContent = `检查失败：${error.message}`;
+  }
+}
+
+async function submitBuild(event) {
+  event.preventDefault();
+  const message = document.getElementById("build-message");
+  const button = document.getElementById("build-submit");
+  if (!currentProject) {
+    message.textContent = "请先选择工作区。";
+    return;
+  }
+  const preset = document.getElementById("build-preset").value.trim();
+  if (!preset) {
+    message.textContent = "请填写导出 Preset。";
+    return;
+  }
+  const output = document.getElementById("build-output").value.trim();
+  const debug = document.getElementById("build-debug").checked;
+  button.disabled = true;
+  message.textContent = `正在构建 ${preset}...`;
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/builds`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({preset, output, debug}),
+    });
+    const build = result.build || {};
+    message.textContent = `构建结束：${build.status || "unknown"} · ${build.build_id || ""}`;
+    await loadBuilds();
+  } catch (error) {
+    message.textContent = `构建失败：${error.message}`;
+    await loadBuilds();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderBuilds(builds) {
+  const status = document.getElementById("build-status");
+  const list = document.getElementById("build-list");
+  status.textContent = builds.length ? `${builds.length} 个构建` : "暂无构建";
+  if (!builds.length) {
+    list.innerHTML = '<p class="muted">暂无构建产物。先运行 `uv run godotter export build --preset <preset>`。</p>';
+    return;
+  }
+  list.innerHTML = builds.map((build) => buildHtml(build)).join("");
+}
+
+function buildHtml(build) {
+  const artifacts = build.artifacts || [];
+  const links = artifacts.length
+    ? artifacts.map((artifact) => {
+      const artifactPath = artifact.path || "";
+      const prefix = `.godotter/builds/${build.build_id}/`;
+      const downloadPath = artifactPath.startsWith(prefix) ? artifactPath.slice(prefix.length) : artifact.name;
+      const href = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(build.build_id)}/download/${encodeURI(downloadPath)}`;
+      return `<a class="button-link" href="${href}">${escapeHtml(artifact.name || downloadPath)} (${formatBytes(artifact.size_bytes || 0)})</a>`;
+    }).join("")
+    : '<span class="muted">没有可下载产物</span>';
+  return `
+    <article class="build-card">
+      <div>
+        <strong>${escapeHtml(build.preset || "unknown preset")}</strong>
+        <span class="status-pill run-${escapeHtml(build.status || "unknown")}">${escapeHtml(build.status || "unknown")}</span>
+      </div>
+      <p class="muted">${escapeHtml(build.build_id || "")} · ${escapeHtml(build.created_at || "")}</p>
+      <div class="build-downloads">${links}</div>
+    </article>
+  `;
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 async function loadSavedSession() {
@@ -747,6 +870,10 @@ document.getElementById("cancel-run").addEventListener("click", async () => {
     sessionStatus.textContent = "停止失败。";
   }
 });
+
+document.getElementById("build-form").addEventListener("submit", submitBuild);
+document.getElementById("build-doctor").addEventListener("click", runBuildDoctor);
+document.getElementById("build-refresh").addEventListener("click", loadBuilds);
 
 setupViewTabs();
 loadState();

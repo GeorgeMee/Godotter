@@ -31,6 +31,7 @@
           <a class="view-tab" href="#chat" data-view="chat">Chat</a>
           <a class="view-tab" href="#task" data-view="task">Task</a>
           <a class="view-tab" href="#log" data-view="log">Log</a>
+          <a class="view-tab" href="#build" data-view="build">Build</a>
         </nav>
         <p class="view-current">当前界面：<strong id="current-view-label">Chat</strong></p>
       </header>
@@ -97,6 +98,38 @@
           </div>
           <div class="run-history" id="run-history"></div>
           <pre class="log" id="run-log">等待运行。</pre>
+        </article>
+
+        <article class="panel build-panel is-hidden" data-panel="build">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Build</p>
+              <h2>游戏包下载</h2>
+              <p class="subtle">选择导出 Preset 后可直接打包；产物会显示在这里供手机下载。</p>
+            </div>
+            <span class="badge green" id="build-status">暂无构建</span>
+          </div>
+          <form class="build-form" id="build-form">
+            <label>
+              <span>导出 Preset</span>
+              <input id="build-preset" name="preset" placeholder="例如 Web / Windows Desktop" required />
+            </label>
+            <label>
+              <span>输出路径（可选）</span>
+              <input id="build-output" name="output" placeholder="默认输出到 .godotter/builds" />
+            </label>
+            <label class="checkbox-line">
+              <input id="build-debug" type="checkbox" />
+              <span>Debug 导出</span>
+            </label>
+            <div class="button-row">
+              <button type="submit" id="build-submit">开始 Build</button>
+              <button type="button" class="secondary" id="build-doctor">检查导出配置</button>
+              <button type="button" class="secondary" id="build-refresh">刷新列表</button>
+            </div>
+            <p class="muted" id="build-message">需要项目存在 `export_presets.cfg`，且 Godot 已安装对应导出模板。</p>
+          </form>
+          <div class="build-list" id="build-list"></div>
         </article>
       </section>
     </main>

@@ -89,6 +89,37 @@ def test_task_page_mentions_runstate_and_verify_report():
     assert 'flow-status' not in html
 
 
+def test_build_download_frontend_and_api(tmp_path):
+    from pathlib import Path
+
+    html = Path('src/godotter_web/static/index.html').read_text(encoding='utf-8')
+    script = Path('src/godotter_web/static/app.js').read_text(encoding='utf-8')
+    assert 'data-view="build"' in html
+    assert 'id="build-list"' in html
+    assert 'id="build-form"' in html
+    assert 'id="build-submit"' in html
+    assert 'id="build-doctor"' in html
+    assert 'async function loadBuilds()' in script
+    assert 'async function submitBuild(event)' in script
+    assert 'async function runBuildDoctor()' in script
+    assert 'document.getElementById("build-form").addEventListener("submit", submitBuild)' in script
+    assert '/builds/${encodeURIComponent(build.build_id)}/download/' in script
+    assert '/builds/doctor' in script
+
+
+def test_web_build_list_and_download_helpers(tmp_path):
+    try:
+        from godotter_web.app import _safe_project_file
+    except ModuleNotFoundError:
+        return
+
+    artifact = tmp_path / '.godotter' / 'builds' / 'build_demo' / 'game.zip'
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b'zip')
+    resolved = _safe_project_file(tmp_path, '.godotter/builds/build_demo/game.zip')
+    assert resolved == artifact.resolve()
+
+
 def test_web_run_artifact_enrichment(tmp_path):
     try:
         from godotter_web.app import _enrich_run_artifacts, _extract_prefixed_path

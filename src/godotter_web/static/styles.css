@@ -88,7 +88,7 @@ textarea {
 
 .view-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -451,6 +451,69 @@ small {
 .run-chip span,
 .run-chip small {
   color: var(--muted);
+}
+
+.build-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.build-form {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  background: #11141a;
+}
+
+.build-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.build-form label span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.checkbox-line {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-line input {
+  width: auto;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.build-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #14171d;
+}
+
+.build-card > div:first-child {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.build-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (min-width: 860px) {

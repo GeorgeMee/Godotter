@@ -61,6 +61,47 @@ class FakeUidFixResult:
         self.changes = [FakeUidFixChange(file_path)]
 
 
+class FakeBuildArtifact:
+    def __init__(self, path: str = '.godotter/builds/build_demo/game.zip') -> None:
+        self.path = path
+        self.name = Path(path).name
+        self.size_bytes = 123
+
+
+class FakeBuildReport:
+    def __init__(self, status: str = 'passed') -> None:
+        self.build_id = 'build_demo'
+        self.status = status
+        self.preset = 'Web'
+        self.output_path = '.godotter/builds/build_demo/index.html'
+        self.exit_code = 0 if status == 'passed' else 1
+        self.timed_out = False
+        self.artifacts = [FakeBuildArtifact()]
+
+
+class FakeExportPreset:
+    def __init__(self) -> None:
+        self.index = 0
+        self.name = 'Web'
+        self.platform = 'Web'
+
+
+class FakeExportDoctorReport:
+    def __init__(self, workspace_root: Path, ok: bool = True) -> None:
+        self.workspace_root = workspace_root.as_posix()
+        self.project_exists = True
+        self.export_presets_exists = True
+        self.presets = [FakeExportPreset()]
+        self.godot_configured = True
+        self.godot_path_exists = True
+        self.godot_version = '4.6.1.stable.official'
+        self.templates_root = '/tmp/Godot/export_templates/4.6.1.stable'
+        self.templates_detected = True
+        self.ok = ok
+        self.errors = [] if ok else ['export_presets.cfg is missing']
+        self.warnings = []
+
+
 class FakeRuntimeTarget:
     def __init__(self, workspace_root: Path, godot_path: str | None = '/usr/bin/godot') -> None:
         self.project_name = 'demo'
@@ -186,6 +227,78 @@ def test_runtime_uid_fix_command(monkeypatch, tmp_path):
     assert 'dry_run=false' in result.stdout
     assert 'updated_files=1' in result.stdout
     assert 'change file=scenes/main.tscn uid=uid://player123 old_path=res://old/player.gd new_path=res://scripts/player.gd' in result.stdout
+
+
+def test_export_build_command_writes_report_summary(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'godot_path': '/usr/bin/godot',
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.run_export_build',
+        lambda **kwargs: (FakeBuildReport(), tmp_path / '.godotter' / 'builds' / 'build_demo' / 'build_report.json'),
+    )
+
+    result = runner.invoke(app, ['export', 'build', '--preset', 'Web'])
+
+    assert result.exit_code == 0
+    assert 'build_id=build_demo' in result.stdout
+    assert 'status=passed' in result.stdout
+    assert 'artifact path=.godotter/builds/build_demo/game.zip size_bytes=123' in result.stdout
+
+
+def test_export_list_command_lists_build_reports(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.list_build_reports',
+        lambda workspace_root: [{'build_id': 'build_demo', 'status': 'passed', 'preset': 'Web', 'artifacts': [{}]}],
+    )
+
+    result = runner.invoke(app, ['export', 'list'])
+
+    assert result.exit_code == 0
+    assert 'count=1' in result.stdout
+    assert 'build id=build_demo status=passed preset=Web artifacts=1' in result.stdout
+
+
+def test_export_doctor_command_reports_presets_and_templates(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.run_export_doctor',
+        lambda **kwargs: FakeExportDoctorReport(tmp_path),
+    )
+
+    result = runner.invoke(app, ['export', 'doctor'])
+
+    assert result.exit_code == 0
+    assert 'export_presets=true' in result.stdout
+    assert 'preset index=0 name=Web platform=Web' in result.stdout
+    assert 'templates_detected=true' in result.stdout
+    assert 'ok=true' in result.stdout
+
+
+def test_export_doctor_command_fails_when_project_not_export_ready(monkeypatch, tmp_path):
+    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+        'workspace_root': tmp_path,
+    })())
+    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr(
+        'godotter.interfaces.cli.run_export_doctor',
+        lambda **kwargs: FakeExportDoctorReport(tmp_path, ok=False),
+    )
+
+    result = runner.invoke(app, ['export', 'doctor'])
+
+    assert result.exit_code == 1
+    assert 'error=export_presets.cfg is missing' in result.stdout
+    assert 'ok=false' in result.stdout
 
 
 def test_runtime_lint_command_accepts_project_option(monkeypatch, tmp_path):

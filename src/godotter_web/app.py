@@ -7,6 +7,7 @@ import sys
 import secrets
 import subprocess
 import threading
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from godotter.context import Memory
 from godotter.llm import create_brain
 from godotter.operations.projects import scaffold_godot_project
 from godotter.project_registry import load_project_registry
+from godotter.runtime.builds import list_build_reports, run_export_build, run_export_doctor
 from godotter.tasks.planpack import (
     PlanPack,
     PlanState,
@@ -429,6 +431,21 @@ def _read_artifact_json(workspace_root: Path, value: str) -> dict[str, object] |
         return _read_json(path)
     except Exception:
         return None
+
+
+def _safe_project_file(workspace_root: Path, rel_path: str) -> Path:
+    normalized = rel_path.strip().replace('\\', '/')
+    if not normalized or normalized.startswith('/') or '..' in normalized.split('/'):
+        raise HTTPException(status_code=400, detail='invalid_artifact_path')
+    path = (workspace_root / normalized).resolve()
+    root = workspace_root.resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail='artifact_path_outside_project') from exc
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail='artifact_not_found')
+    return path
 
 
 def _extract_prefixed_path(text: str, prefix: str) -> str | None:
@@ -1139,6 +1156,69 @@ def project_workpacks(name: str, request: Request) -> dict[str, object]:
         'name': name,
         'workpacks': _list_json_files(root / '.godotter' / 'workpacks'),
     }
+
+
+@app.get('/api/projects/{name}/builds')
+def project_builds(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    return {
+        'ok': True,
+        'name': name,
+        'builds': list_build_reports(root),
+    }
+
+
+@app.get('/api/projects/{name}/builds/doctor')
+def project_build_doctor(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    settings = get_settings()
+    report = run_export_doctor(workspace_root=root, godot_path=settings.godot_path)
+    return {'ok': report.ok, 'doctor': asdict(report)}
+
+
+@app.post('/api/projects/{name}/builds')
+async def project_build_create(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    preset = str(payload.get('preset', '')).strip()
+    if not preset:
+        raise HTTPException(status_code=400, detail='preset_required')
+    settings = get_settings()
+    if not settings.godot_path:
+        raise HTTPException(status_code=400, detail='GODOT_PATH is not configured')
+    output_value = str(payload.get('output', '')).strip()
+    output = Path(output_value) if output_value else None
+    debug = bool(payload.get('debug', False))
+    timeout = int(payload.get('timeout', 1800) or 1800)
+    report, report_path = run_export_build(
+        godot_path=settings.godot_path,
+        workspace_root=root,
+        preset=preset,
+        output=output,
+        release=not debug,
+        timeout=timeout,
+    )
+    return {
+        'ok': report.status == 'passed',
+        'build': asdict(report),
+        'build_report': report_path.as_posix(),
+    }
+
+
+@app.get('/api/projects/{name}/builds/{build_id}/download/{artifact_path:path}')
+def project_build_download(name: str, build_id: str, artifact_path: str, request: Request) -> FileResponse:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    build_id = _validate_id(build_id, prefix='build')
+    rel_path = f'.godotter/builds/{build_id}/{artifact_path}'
+    path = _safe_project_file(root, rel_path)
+    return FileResponse(path, filename=path.name)
 
 
 @app.get('/api/projects/{name}/sessions')

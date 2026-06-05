@@ -38,7 +38,16 @@ from godotter.operations import (
     set_provider_key,
     test_kind_pattern,
 )
-from godotter.runtime import default_verify_commands, fix_uid_paths, latest_verify_report_path, run_doctor, run_verify
+from godotter.runtime import (
+    default_verify_commands,
+    fix_uid_paths,
+    latest_verify_report_path,
+    list_build_reports,
+    run_doctor,
+    run_export_build,
+    run_export_doctor,
+    run_verify,
+)
 from godotter.runtime.validators import validate_managers, validate_nodepaths, validate_paths, validate_structure
 from godotter.tasks.planpack import (
     PlanPack,
@@ -95,6 +104,7 @@ plan_app = typer.Typer(help='Prepare and run multi-step plans (PlanPacks).')
 scene_app = typer.Typer(help='Create scenes and paired scripts (tscn + gd).')
 test_app = typer.Typer(help='Create and manage Godotter test harnesses.')
 scaffold_app = typer.Typer(help='Generate convention-compliant project files.')
+export_app = typer.Typer(help='Build and list Godot export packages.')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
@@ -105,6 +115,7 @@ app.add_typer(task_app, name='task')
 app.add_typer(plan_app, name='plan')
 app.add_typer(scene_app, name='scene')
 app.add_typer(scaffold_app, name='scaffold')
+app.add_typer(export_app, name='export')
 
 
 @app.callback()
@@ -1066,6 +1077,90 @@ def _scaffold_test_command(
     typer.echo(f'scene={result.scene_path.relative_to(root).as_posix()}')
     typer.echo(f'script={result.script_path.relative_to(root).as_posix()}')
     typer.echo(f'uid={result.uid}')
+
+
+@export_app.command('build', help='Export a Godot project package using an export preset.')
+def export_build_command(
+    preset: str = typer.Option(..., '--preset', help='Godot export preset name, e.g. Web, Android, Windows Desktop.'),
+    project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    output: Path | None = typer.Option(
+        None,
+        '--output',
+        help='Optional output file path. Relative paths are resolved under the project root.',
+    ),
+    debug: bool = typer.Option(False, '--debug', help='Use --export-debug instead of --export-release.'),
+    timeout: int = typer.Option(1800, '--timeout', min=0, help='Timeout in seconds (0 = no timeout).'),
+) -> None:
+    settings = get_settings()
+    target = resolve_runtime_target(settings, project=project)
+    if not target.godot_path:
+        raise typer.BadParameter('GODOT_PATH is not configured')
+    report, path = run_export_build(
+        godot_path=target.godot_path,
+        workspace_root=target.workspace_root,
+        preset=preset,
+        output=output,
+        release=not debug,
+        timeout=timeout,
+    )
+    typer.echo(f'build_report={path.as_posix()}')
+    typer.echo(f'build_id={report.build_id}')
+    typer.echo(f'status={report.status}')
+    typer.echo(f'preset={report.preset}')
+    typer.echo(f'output={report.output_path}')
+    typer.echo(f'exit_code={report.exit_code}')
+    typer.echo(f'timed_out={str(report.timed_out).lower()}')
+    for artifact in report.artifacts:
+        typer.echo(f'artifact path={artifact.path} size_bytes={artifact.size_bytes}')
+    if report.status != 'passed':
+        raise typer.Exit(1)
+
+
+@export_app.command('list', help='List package builds under .godotter/builds/.')
+def export_list_command(
+    project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+) -> None:
+    settings = get_settings()
+    target = resolve_runtime_target(settings, project=project)
+    reports = list_build_reports(target.workspace_root)
+    typer.echo(f'workspace_root={target.workspace_root.as_posix()}')
+    typer.echo(f'count={len(reports)}')
+    for report in reports[:50]:
+        typer.echo(
+            'build '
+            f'id={report.get("build_id")} '
+            f'status={report.get("status")} '
+            f'preset={report.get("preset")} '
+            f'artifacts={len(report.get("artifacts", []))}'
+        )
+
+
+@export_app.command('doctor', help='Check export presets and Godot export template availability.')
+def export_doctor_command(
+    project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    timeout: int = typer.Option(15, '--timeout', min=1, help='Timeout in seconds for Godot version detection.'),
+) -> None:
+    settings = get_settings()
+    target = resolve_runtime_target(settings, project=project)
+    report = run_export_doctor(workspace_root=target.workspace_root, godot_path=target.godot_path, timeout=timeout)
+    typer.echo(f'workspace_root={report.workspace_root}')
+    typer.echo(f'project_godot={str(report.project_exists).lower()}')
+    typer.echo(f'export_presets={str(report.export_presets_exists).lower()}')
+    typer.echo(f'presets={len(report.presets)}')
+    for preset in report.presets:
+        typer.echo(f'preset index={preset.index} name={preset.name} platform={preset.platform}')
+    typer.echo(f'godot_configured={str(report.godot_configured).lower()}')
+    typer.echo(f'godot_path_exists={str(report.godot_path_exists).lower()}')
+    typer.echo(f'godot_version={report.godot_version or ""}')
+    typer.echo(f'templates_root={report.templates_root or ""}')
+    typer.echo(f'templates_detected={str(report.templates_detected).lower()}')
+    for warning in report.warnings:
+        typer.echo(f'warning={warning}')
+    for error in report.errors:
+        typer.echo(f'error={error}')
+    typer.echo(f'ok={str(report.ok).lower()}')
+    if not report.ok:
+        raise typer.Exit(1)
 
 
 @app.command('new', hidden=True)
