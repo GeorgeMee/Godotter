@@ -139,7 +139,7 @@
             <div>
               <p class="eyebrow">Git</p>
               <h2>版本控制</h2>
-              <p class="subtle">安全 Git 工具：查看状态、查看 diff、提交已选文件、fetch、ff-only pull、push。</p>
+              <p class="subtle">安全 Git 工具：查看状态、切换分支、查看 diff、提交已选文件、fetch、ff-only pull、push。</p>
             </div>
             <span class="badge green" id="git-status">未读取</span>
           </div>
@@ -151,6 +151,17 @@
             <button type="button" class="secondary" id="git-push">Push</button>
           </div>
           <div class="git-summary" id="git-summary">等待读取 Git 状态。</div>
+          <div class="git-branch-panel">
+            <div>
+              <h3>Branches</h3>
+              <p class="muted" id="git-branch-current">当前分支：未读取</p>
+            </div>
+            <div class="git-branch-controls">
+              <select id="git-branch-select" aria-label="Git branch"></select>
+              <button type="button" class="secondary" id="git-checkout">Checkout</button>
+            </div>
+            <div class="git-branches" id="git-branches"></div>
+          </div>
           <div class="git-layout">
             <section>
               <h3>Changes</h3>
@@ -166,7 +177,7 @@
             </section>
           </div>
           <h3>Recent commits</h3>
-          <pre class="log git-log" id="git-log">暂无。</pre>
+          <div class="git-log" id="git-log">暂无。</div>
         </article>
 
         <article class="panel files-panel is-hidden" data-panel="files">

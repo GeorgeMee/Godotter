@@ -217,7 +217,8 @@ async function loadGitStatus() {
   const summary = document.getElementById("git-summary");
   const files = document.getElementById("git-files");
   const log = document.getElementById("git-log");
-  if (!status || !summary || !files || !log || !currentProject) {
+  const branchSelect = document.getElementById("git-branch-select");
+  if (!status || !summary || !files || !log || !branchSelect || !currentProject) {
     return;
   }
   try {
@@ -227,7 +228,8 @@ async function loadGitStatus() {
     status.textContent = "Git unavailable";
     summary.textContent = error.message;
     files.innerHTML = "";
-    log.textContent = "";
+    log.innerHTML = "";
+    branchSelect.innerHTML = "";
   }
 }
 
@@ -236,11 +238,17 @@ function renderGitStatus(git) {
   const summary = document.getElementById("git-summary");
   const files = document.getElementById("git-files");
   const log = document.getElementById("git-log");
+  const branchCurrent = document.getElementById("git-branch-current");
+  const branchSelect = document.getElementById("git-branch-select");
+  const branches = document.getElementById("git-branches");
   if (!git.is_repo) {
     status.textContent = "Not a Git repo";
     summary.textContent = "当前游戏项目还没有 .git。可以点击 Init Git 初始化项目仓库。";
     files.innerHTML = '<p class="muted">No Git repository.</p>';
-    log.textContent = "";
+    log.innerHTML = "";
+    branchCurrent.textContent = "当前分支：无仓库";
+    branchSelect.innerHTML = "";
+    branches.innerHTML = '<p class="muted">No Git repository.</p>';
     return;
   }
   const changes = git.files || [];
@@ -253,10 +261,57 @@ function renderGitStatus(git) {
   files.innerHTML = changes.length
     ? changes.map((file) => gitFileHtml(file)).join("")
     : '<p class="muted">No working tree changes.</p>';
-  log.textContent = (git.recent_commits || []).join("\n") || "No commits.";
+  renderGitBranches(git);
+  renderGitCommits(git.commits || []);
   for (const button of files.querySelectorAll("[data-diff-path]")) {
     button.addEventListener("click", () => loadGitDiff(button.dataset.diffPath || ""));
   }
+}
+
+function renderGitBranches(git) {
+  const branchCurrent = document.getElementById("git-branch-current");
+  const branchSelect = document.getElementById("git-branch-select");
+  const branches = document.getElementById("git-branches");
+  const items = git.branches || [];
+  branchCurrent.textContent = `当前分支：${git.branch || "(detached)"}`;
+  branchSelect.innerHTML = items.map((branch) => {
+    const selected = branch.current ? " selected" : "";
+    const label = `${branch.name}${branch.upstream ? ` -> ${branch.upstream}` : ""}`;
+    return `<option value="${escapeHtml(branch.name)}"${selected}>${escapeHtml(label)}</option>`;
+  }).join("");
+  branches.innerHTML = items.length
+    ? items.map((branch) => gitBranchHtml(branch)).join("")
+    : '<p class="muted">No branches.</p>';
+}
+
+function gitBranchHtml(branch) {
+  const remote = branch.remote ? "remote" : "local";
+  return `
+    <article class="git-branch-card ${branch.current ? "active" : ""}">
+      <strong>${escapeHtml(branch.name)}</strong>
+      <span class="status-pill">${branch.current ? "current" : remote}</span>
+      <small>${escapeHtml(branch.commit || "")} ${escapeHtml(branch.subject || "")}</small>
+    </article>
+  `;
+}
+
+function renderGitCommits(commits) {
+  const log = document.getElementById("git-log");
+  log.innerHTML = commits.length
+    ? commits.map((commit) => gitCommitHtml(commit)).join("")
+    : '<p class="muted">No commits.</p>';
+}
+
+function gitCommitHtml(commit) {
+  return `
+    <article class="git-commit-row">
+      <code title="${escapeHtml(commit.hash || "")}">${escapeHtml(commit.short || "")}</code>
+      <div>
+        <strong>${escapeHtml(commit.subject || "")}</strong>
+        <small>${escapeHtml(commit.author || "")} · ${escapeHtml(commit.relative_date || "")}</small>
+      </div>
+    </article>
+  `;
 }
 
 function gitFileHtml(file) {
@@ -302,6 +357,31 @@ async function runGitAction(action) {
     ].filter(Boolean).join("\n") || `git ${action} finished`;
   } catch (error) {
     summary.textContent = `git_${action}_error ${error.message}`;
+  }
+}
+
+async function checkoutGitBranch() {
+  const summary = document.getElementById("git-summary");
+  const select = document.getElementById("git-branch-select");
+  const branch = select?.value || "";
+  if (!currentProject || !summary || !branch) {
+    return;
+  }
+  summary.textContent = `Running git checkout ${branch}...`;
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/git/checkout`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({branch}),
+    });
+    renderGitStatus(result.git);
+    document.getElementById("git-diff").textContent = [
+      result.result?.stdout || "",
+      result.result?.stderr || "",
+    ].filter(Boolean).join("\n") || `checked out ${branch}`;
+    await loadProjectTree("");
+  } catch (error) {
+    summary.textContent = `git_checkout_error ${error.message}`;
   }
 }
 
@@ -1078,6 +1158,7 @@ document.getElementById("git-init").addEventListener("click", initGitRepo);
 document.getElementById("git-fetch").addEventListener("click", () => runGitAction("fetch"));
 document.getElementById("git-pull").addEventListener("click", () => runGitAction("pull"));
 document.getElementById("git-push").addEventListener("click", () => runGitAction("push"));
+document.getElementById("git-checkout").addEventListener("click", checkoutGitBranch);
 document.getElementById("git-commit-form").addEventListener("submit", submitGitCommit);
 document.getElementById("tree-refresh").addEventListener("click", () => loadProjectTree());
 document.getElementById("tree-root").addEventListener("click", () => loadProjectTree(""));

@@ -529,6 +529,57 @@ small {
   gap: 14px;
 }
 
+.git-branch-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #11141a;
+}
+
+.git-branch-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.git-branch-controls select {
+  width: 100%;
+}
+
+.git-branches {
+  display: grid;
+  gap: 8px;
+}
+
+.git-branch-card,
+.git-commit-row {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #14171d;
+}
+
+.git-branch-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.git-branch-card.active {
+  border-color: var(--primary);
+  background: rgba(47, 106, 255, 0.12);
+}
+
+.git-branch-card small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .git-files {
   display: grid;
   gap: 8px;
@@ -560,6 +611,26 @@ small {
 .git-diff,
 .git-log {
   min-height: 180px;
+}
+
+.git-log {
+  display: grid;
+  gap: 8px;
+}
+
+.git-commit-row {
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: start;
+}
+
+.git-commit-row strong,
+.git-commit-row small {
+  display: block;
+}
+
+.git-commit-row small {
+  margin-top: 4px;
+  color: var(--muted);
 }
 
 .tree-actions label {

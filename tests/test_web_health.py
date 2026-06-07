@@ -122,12 +122,19 @@ def test_git_frontend_controls_are_present():
     assert 'id="git-fetch"' in html
     assert 'id="git-pull"' in html
     assert 'id="git-push"' in html
+    assert 'id="git-branch-select"' in html
+    assert 'id="git-checkout"' in html
+    assert 'id="git-branches"' in html
     assert 'id="git-commit-form"' in html
     assert 'async function loadGitStatus()' in script
+    assert 'function renderGitBranches(git)' in script
+    assert 'function renderGitCommits(commits)' in script
+    assert 'async function checkoutGitBranch()' in script
     assert 'async function initGitRepo()' in script
     assert 'async function submitGitCommit(event)' in script
     assert '/git/status' in script
     assert '/git/init' in script
+    assert '/git/checkout' in script
     assert '/git/commit' in script
 
 
@@ -155,6 +162,32 @@ def test_git_status_summary_handles_non_repo(tmp_path):
     summary = _git_status_summary(tmp_path)
     assert summary['is_repo'] is False
     assert summary['files'] == []
+    assert summary['branches'] == []
+    assert summary['commits'] == []
+
+
+def test_git_status_summary_includes_branches_and_commits(tmp_path):
+    import subprocess
+
+    try:
+        from godotter_web.app import _git_status_summary
+    except ModuleNotFoundError:
+        return
+
+    subprocess.run(['git', 'init'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'config', 'user.name', 'Godotter Test'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'config', 'user.email', 'godotter@example.com'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    (tmp_path / 'README.md').write_text('# Demo\n', encoding='utf-8')
+    subprocess.run(['git', 'add', 'README.md'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'commit', '-m', 'Initial commit'], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(['git', 'switch', '-c', 'feature/snake'], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    summary = _git_status_summary(tmp_path)
+
+    assert summary['is_repo'] is True
+    assert summary['branch'] == 'feature/snake'
+    assert any(branch['name'] == 'feature/snake' and branch['current'] for branch in summary['branches'])
+    assert summary['commits'][0]['subject'] == 'Initial commit'
 
 
 def test_project_tree_helper_filters_noise_files(tmp_path):

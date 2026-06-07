@@ -176,6 +176,15 @@ def _safe_git_relpath(value: str) -> str:
     return text
 
 
+def _safe_git_branch(value: str) -> str:
+    text = value.strip()
+    if not text or text.startswith('-') or any(ch.isspace() for ch in text):
+        raise HTTPException(status_code=400, detail='invalid_git_branch')
+    if '..' in text or text.endswith('/') or text.endswith('.lock') or '@{' in text:
+        raise HTTPException(status_code=400, detail='invalid_git_branch')
+    return text
+
+
 def _safe_project_relpath(value: str) -> str:
     text = value.strip().replace('\\', '/')
     if not text:
@@ -254,10 +263,16 @@ def _git_status_summary(workspace_root: Path) -> dict[str, object]:
             'branch_line': '',
             'dirty': False,
             'files': [],
+            'branches': [],
+            'commits': [],
             'recent_commits': [],
         }
     status = _run_git(workspace_root, ['status', '--porcelain=v1', '-b'])
-    log = _run_git(workspace_root, ['log', '--oneline', '-n', '10'])
+    branches_result = _run_git(
+        workspace_root,
+        ['branch', '--all', '--format=%(HEAD)%09%(refname:short)%09%(upstream:short)%09%(objectname:short)%09%(subject)'],
+    )
+    log = _run_git(workspace_root, ['log', '--date=relative', '--format=%h%x1f%H%x1f%an%x1f%ar%x1f%s%x1e', '-n', '30'])
     lines = str(status['stdout']).splitlines()
     branch_line = lines[0] if lines and lines[0].startswith('## ') else ''
     files = []
@@ -274,6 +289,8 @@ def _git_status_summary(workspace_root: Path) -> dict[str, object]:
     upstream = ''
     if '...' in branch_line:
         upstream = branch_line.split('...', 1)[1].split(' ', 1)[0]
+    branches = _parse_git_branches(str(branches_result['stdout']) if branches_result['ok'] else '')
+    commits = _parse_git_commits(str(log['stdout']) if log['ok'] else '')
     return {
         'is_repo': True,
         'branch': branch,
@@ -281,8 +298,57 @@ def _git_status_summary(workspace_root: Path) -> dict[str, object]:
         'branch_line': branch_line[3:] if branch_line else '',
         'dirty': bool(files),
         'files': files,
-        'recent_commits': str(log['stdout']).splitlines() if log['ok'] else [],
+        'branches': branches,
+        'commits': commits,
+        'recent_commits': [commit['line'] for commit in commits],
     }
+
+
+def _parse_git_branches(output: str) -> list[dict[str, object]]:
+    branches: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for line in output.splitlines():
+        parts = line.split('\t')
+        if len(parts) < 5:
+            continue
+        marker, name, upstream, commit, subject = parts[:5]
+        if not name or name.startswith('origin/HEAD') or name in seen:
+            continue
+        seen.add(name)
+        branches.append(
+            {
+                'name': name,
+                'current': marker.strip() == '*',
+                'upstream': upstream,
+                'commit': commit,
+                'subject': subject,
+                'remote': name.startswith('remotes/') or name.startswith('origin/'),
+            }
+        )
+    return branches
+
+
+def _parse_git_commits(output: str) -> list[dict[str, object]]:
+    commits: list[dict[str, object]] = []
+    for raw in output.split('\x1e'):
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split('\x1f')
+        if len(parts) < 5:
+            continue
+        short, full, author, relative_date, subject = parts[:5]
+        commits.append(
+            {
+                'short': short,
+                'hash': full,
+                'author': author,
+                'relative_date': relative_date,
+                'subject': subject,
+                'line': f'{short} {subject}',
+            }
+        )
+    return commits
 
 
 def _json_file_summary(path: Path) -> dict[str, object]:
@@ -1428,6 +1494,25 @@ def project_git_push(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
     root = _project_root_or_404(name)
     result = _run_git(root, ['push'], timeout=120)
+    return {'ok': result['ok'], 'result': result, 'git': _git_status_summary(root)}
+
+
+@app.post('/api/projects/{name}/git/checkout')
+async def project_git_checkout(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    branch = _safe_git_branch(str(payload.get('branch', '')))
+    summary = _git_status_summary(root)
+    if summary['dirty']:
+        raise HTTPException(status_code=409, detail='working_tree_must_be_clean_before_checkout')
+    result = _run_git(root, ['switch', branch], timeout=120)
+    if not result['ok'] and branch.startswith('origin/'):
+        local_name = _safe_git_branch(branch.split('/', 1)[1])
+        result = _run_git(root, ['switch', '--track', '-c', local_name, branch], timeout=120)
     return {'ok': result['ok'], 'result': result, 'git': _git_status_summary(root)}
 
 
