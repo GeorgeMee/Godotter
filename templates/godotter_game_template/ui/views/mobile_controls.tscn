@@ -1,0 +1,106 @@
+[gd_scene load_steps=2 format=3 uid="{{UID_MOBILE_CONTROLS_SCENE}}"]
+
+[ext_resource type="Script" path="res://ui/scripts/mobile_controls.gd" id="1_mobile_controls"]
+
+[node name="MobileControls" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1_mobile_controls")
+
+[node name="DPad" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = -184.0
+offset_right = 184.0
+offset_bottom = -24.0
+grow_vertical = 0
+
+[node name="Left" type="Button" parent="DPad"]
+layout_mode = 1
+offset_left = 0.0
+offset_top = 56.0
+offset_right = 48.0
+offset_bottom = 104.0
+text = "←"
+
+[node name="Right" type="Button" parent="DPad"]
+layout_mode = 1
+offset_left = 112.0
+offset_top = 56.0
+offset_right = 160.0
+offset_bottom = 104.0
+text = "→"
+
+[node name="Up" type="Button" parent="DPad"]
+layout_mode = 1
+offset_left = 56.0
+offset_top = 0.0
+offset_right = 104.0
+offset_bottom = 48.0
+text = "↑"
+
+[node name="Down" type="Button" parent="DPad"]
+layout_mode = 1
+offset_left = 56.0
+offset_top = 112.0
+offset_right = 104.0
+offset_bottom = 160.0
+text = "↓"
+
+[node name="Actions" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -196.0
+offset_top = -184.0
+offset_right = -24.0
+offset_bottom = -24.0
+grow_horizontal = 0
+grow_vertical = 0
+
+[node name="Primary" type="Button" parent="Actions"]
+layout_mode = 1
+offset_left = 96.0
+offset_top = 48.0
+offset_right = 160.0
+offset_bottom = 112.0
+text = "A"
+
+[node name="Secondary" type="Button" parent="Actions"]
+layout_mode = 1
+offset_left = 24.0
+offset_top = 80.0
+offset_right = 88.0
+offset_bottom = 144.0
+text = "B"
+
+[node name="Tertiary" type="Button" parent="Actions"]
+layout_mode = 1
+offset_left = 56.0
+offset_top = 8.0
+offset_right = 120.0
+offset_bottom = 72.0
+text = "C"
+
+[node name="Pause" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -96.0
+offset_top = 24.0
+offset_right = -24.0
+offset_bottom = 64.0
+grow_horizontal = 0
+text = "Pause"

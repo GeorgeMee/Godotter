@@ -17,6 +17,9 @@ func _ready() -> void:
 	if instance.get_node_or_null("Managers/EventBus") == null:
 		_fail("Managers/EventBus missing")
 		return
+	if instance.get_node_or_null("Managers/InputMapper") == null:
+		_fail("Managers/InputMapper missing")
+		return
 	_pass("main smoke")
 
 
