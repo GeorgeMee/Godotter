@@ -1543,6 +1543,9 @@ def _run_task_verification_commands(workspace_root: Path, commands: list[str]) -
     for command in commands:
         command = _rewrite_verification_command(workspace_root, command)
         typer.echo(f'task_run_verify command={command}')
+        if not command:
+            typer.echo('task_run_verify exit_code=1 command_empty=true')
+            return False, 'verify_empty_command', ''
         try:
             completed = subprocess.run(
                 command,
