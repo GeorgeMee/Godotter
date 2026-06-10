@@ -1307,6 +1307,9 @@ def _generate_chat_reply(workspace_root: Path, messages: list[dict[str, object]]
         brain_name=selected_brain,
         project_summary=summary_text,
     )
+    agent.expose_tool_output = False
+    if hasattr(agent.brain, 'tool_choice'):
+        setattr(agent.brain, 'tool_choice', 'auto')
 
     for msg in messages[-20:]:
         role = str(msg.get('role', ''))

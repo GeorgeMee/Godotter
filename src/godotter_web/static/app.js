@@ -1158,84 +1158,45 @@ function appendBubble(role, text, scroll = true) {
   const contentDiv = document.createElement("div");
   contentDiv.className = "bubble-content";
 
-  const paragraphs = text.split(/\n\n+/);
-  for (const para of paragraphs) {
-    const trimmed = para.trim();
-    if (!trimmed) {
-      continue;
+  if (role === "assistant" && typeof marked !== "undefined") {
+    const wrapper = document.createElement("div");
+    wrapper.className = "markdown-body";
+    wrapper.innerHTML = marked.parse(text);
+    for (const pre of wrapper.querySelectorAll("pre")) {
+      const code = pre.querySelector("code");
+      if (!code) continue;
+      const lineCount = (code.textContent || "").split("\n").length;
+      if (lineCount > 80) {
+        const fold = document.createElement("div");
+        fold.className = "code-fold";
+        const foldHead = document.createElement("div");
+        foldHead.className = "code-fold-head";
+        const label = document.createElement("span");
+        label.textContent = `代码块 · ${lineCount} 行`;
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "code-fold-toggle";
+        toggle.textContent = "展开";
+        foldHead.append(label, toggle);
+        pre.style.display = "none";
+        toggle.addEventListener("click", () => {
+          const hidden = pre.style.display === "none";
+          pre.style.display = hidden ? "block" : "none";
+          toggle.textContent = hidden ? "收起" : "展开";
+        });
+        fold.append(foldHead, pre);
+        wrapper.replaceChild(fold, pre);
+      }
     }
-
-    const lineCount = (trimmed.match(/^ {0,2}\d+ \| /gm) || []).length;
-
-    const isSceneInspect = trimmed.includes("uid=uid://") && trimmed.includes("ext_resource");
-    const isProjectInfo = /^(name|main_scene|autoloads|script_count|scene_count)=/.test(trimmed);
-    const isFileList = /^[a-zA-Z]/.test(trimmed) && (trimmed.match(/^(game|tests|ui|\.godotter)\\?/gm) || []).length >= 3;
-
-    const toolFold = isSceneInspect ? "场景结构" : isProjectInfo ? "项目信息" : isFileList ? "文件列表" : null;
-
-    if (toolFold) {
-      const lines = trimmed.split("\n").length;
-      const wrapper = document.createElement("div");
-      wrapper.className = "code-fold";
-      const foldHead = document.createElement("div");
-      foldHead.className = "code-fold-head";
-      const label = document.createElement("span");
-      label.textContent = `${toolFold} · ${lines} 行`;
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "code-fold-toggle";
-      toggle.textContent = "展开";
-      foldHead.append(label, toggle);
-      const codeBody = document.createElement("div");
-      codeBody.className = "code-fold-body";
-      codeBody.style.display = "none";
-      const codeEl = document.createElement("code");
-      codeEl.textContent = trimmed;
-      codeBody.appendChild(codeEl);
-      toggle.addEventListener("click", () => {
-        const hidden = codeBody.style.display === "none";
-        codeBody.style.display = hidden ? "block" : "none";
-        toggle.textContent = hidden ? "收起" : "展开";
-      });
-      wrapper.append(foldHead, codeBody);
-      contentDiv.appendChild(wrapper);
-    } else if (lineCount >= 8) {
-      const wrapper = document.createElement("div");
-      wrapper.className = "code-fold";
-
-      const foldHead = document.createElement("div");
-      foldHead.className = "code-fold-head";
-
-      const label = document.createElement("span");
-      const firstLine = trimmed.split("\n")[0].replace(/^ {0,2}\d+ \| /, "").trim().slice(0, 60);
-      label.textContent = `代码块 · ${lineCount} 行 · ${firstLine}...`;
-
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "code-fold-toggle";
-      toggle.textContent = "展开";
-      foldHead.append(label, toggle);
-
-      const codeBody = document.createElement("div");
-      codeBody.className = "code-fold-body";
-      codeBody.style.display = "none";
-      const codeEl = document.createElement("code");
-      codeEl.textContent = trimmed;
-      codeBody.appendChild(codeEl);
-
-      toggle.addEventListener("click", () => {
-        const hidden = codeBody.style.display === "none";
-        codeBody.style.display = hidden ? "block" : "none";
-        toggle.textContent = hidden ? "收起" : "展开";
-      });
-
-      wrapper.append(foldHead, codeBody);
-      contentDiv.appendChild(wrapper);
-    } else {
-      const p = document.createElement("p");
-      p.textContent = trimmed;
-      contentDiv.appendChild(p);
-    }
+    contentDiv.appendChild(wrapper);
+  } else if (role === "assistant") {
+    const p = document.createElement("p");
+    p.textContent = text;
+    contentDiv.appendChild(p);
+  } else {
+    const p = document.createElement("p");
+    p.textContent = text;
+    contentDiv.appendChild(p);
   }
   bubble.append(head, contentDiv);
   timeline.appendChild(bubble);

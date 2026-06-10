@@ -36,6 +36,7 @@ class Agent:
         self.registry = registry
         self.memory = memory
         self.project_summary = project_summary
+        self.expose_tool_output = True
         self.state = AgentState(mode=mode, brain_name=brain_name)
         self._refresh_brain_context()
 
@@ -91,7 +92,7 @@ class Agent:
                         'content': result,
                     }
                 )
-                if not thought.text and result:
+                if not thought.text and result and self.expose_tool_output:
                     output_parts.append(result)
         return '\n\n'.join(part for part in output_parts if part)
 
