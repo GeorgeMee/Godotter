@@ -122,7 +122,7 @@ def run_export_build(
 
     # Auto-install Android build template if missing
     if "android" in preset.lower():
-        aar = root / "android" / "build" / "libs" / "release" / "godot-lib.template_release.aar"
+        aar = root / "android" / "libs" / "release" / "godot-lib.template_release.aar"
         if not aar.exists():
             subprocess.run(
                 [godot_path, "--headless", "--path", root.as_posix(), "--install-android-build-template"],
@@ -260,8 +260,9 @@ def run_export_doctor(
         ks_valid = True
 
     # Android build template
-    aar = root / "android" / "build" / "libs" / "release" / "godot-lib.template_release.aar"
-    android_template_installed = aar.exists()
+    aar_release = root / "android" / "libs" / "release" / "godot-lib.template_release.aar"
+    aar_debug = root / "android" / "libs" / "debug" / "godot-lib.template_debug.aar"
+    android_template_installed = aar_release.exists() and aar_debug.exists()
 
     errors: list[str] = []
     warnings: list[str] = []
