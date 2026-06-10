@@ -1540,6 +1540,7 @@ def _secondary_page(
       .panel-stack {{
         display: grid;
         gap: 14px;
+        min-width: 0;
       }}
       .panel-head {{
         display: grid;
@@ -1594,10 +1595,20 @@ def _secondary_page(
         margin: 0;
         padding: 12px;
         white-space: pre-wrap;
+        min-width: 0;
       }}
       .project-list, .items, .qa {{
         display: grid;
         gap: 10px;
+      }}
+      .items .card {{
+        min-width: 0;
+        overflow: hidden;
+      }}
+      .items .card strong {{
+        display: block;
+        overflow-wrap: break-word;
+        word-break: break-word;
       }}
       .project-button {{
         width: 100%;

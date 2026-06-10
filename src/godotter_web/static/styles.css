@@ -424,6 +424,7 @@ small {
   border-radius: 16px;
   padding: 14px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .panel-head,
@@ -944,6 +945,7 @@ small {
 
 .log {
   overflow: auto;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 14px;
@@ -1190,6 +1192,10 @@ small {
   gap: 14px;
   min-width: 0;
 }
+.git-layout section {
+  min-width: 0;
+  overflow: hidden;
+}
 
 .git-branch-panel {
   display: grid;
@@ -1199,12 +1205,14 @@ small {
   padding: 12px;
   background: #11141a;
   min-width: 0;
+  overflow: hidden;
 }
 
 .git-branch-controls {
   display: grid;
   gap: 8px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .git-branch-controls select {
@@ -1214,6 +1222,8 @@ small {
 .git-branches {
   display: grid;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .git-branch-card,
@@ -1251,6 +1261,7 @@ small {
   gap: 8px;
   margin-bottom: 12px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .git-file-row {
@@ -1275,6 +1286,7 @@ small {
 .git-commit-form {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .git-diff,
@@ -1285,6 +1297,13 @@ small {
 .git-log {
   display: grid;
   gap: 8px;
+}
+
+.git-file-row button,
+.git-actions button,
+.git-branch-controls button,
+.git-commit-form button {
+  width: auto;
 }
 
 .git-commit-row {
