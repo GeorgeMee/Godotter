@@ -1636,13 +1636,13 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
             raw = raw[: -len(suffix)].rstrip()
 
     if raw == 'uv run godotter runtime lint --project . (project-wide)':
-        return 'uv run godotter runtime lint --project .'
+        return 'uv run godotter runtime lint --project . --headless'
     if raw == 'uv run godotter runtime lint --project . all':
-        return 'uv run godotter runtime lint --project .'
+        return 'uv run godotter runtime lint --project . --headless'
     if raw == 'uv run godotter runtime lint --project . warnings':
-        return 'uv run godotter runtime lint --project .'
+        return 'uv run godotter runtime lint --project . --headless'
     if raw == 'uv run godotter runtime lint --project . clean':
-        return 'uv run godotter runtime lint --project .'
+        return 'uv run godotter runtime lint --project . --headless'
     if raw in {'uv run godotter runtime verify', 'godotter runtime verify'}:
         return f'{raw} --project .'
     if raw.startswith('uv run godotter runtime verify ') and (' --kind ' in raw or ' --name ' in raw):
@@ -1663,14 +1663,20 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
                 raw = raw.replace('uv run godotter runtime run', 'uv run godotter runtime run --project .')
 
     # Fix common case: planner uses bare filename for runtime lint.
-    prefix = 'uv run godotter runtime lint --project . '
+    prefix = 'uv run godotter runtime lint --project . --headless '
+    fallback_prefix = 'uv run godotter runtime lint --project . '
     if raw.startswith(prefix):
         path = raw[len(prefix) :].strip().strip('"').strip("'")
+    elif raw.startswith(fallback_prefix):
+        path = raw[len(fallback_prefix) :].strip().strip('"').strip("'")
+    else:
+        path = None
+    if path is not None:
         if path.startswith('--path '):
             cleaned = path[len('--path ') :].strip().strip('"').strip("'")
             if cleaned:
-                return f'{prefix}{cleaned}'
-            return 'uv run godotter runtime lint --project .'
+                return f'uv run godotter runtime lint --project . --headless {cleaned}'
+            return 'uv run godotter runtime lint --project . --headless'
         if path and ("/" not in path and "\\" not in path):
             candidate = workspace_root / path
             if not candidate.exists():
@@ -1678,8 +1684,8 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
                 matches = [m for m in matches if m.is_file()]
                 if len(matches) == 1:
                     rel = matches[0].relative_to(workspace_root).as_posix()
-                    return f'{prefix}{rel}'
-    return raw
+                    return f'uv run godotter runtime lint --project . --headless {rel}'
+        return 'uv run godotter runtime lint --project . --headless'
 
 
 def _normalize_verification_commands(commands: list[str]) -> list[str]:
@@ -1710,11 +1716,11 @@ def _normalize_verification_commands(commands: list[str]) -> list[str]:
             if path:
                 # `runtime lint` only accepts a script path; if a directory is given, lint the whole project.
                 if path.endswith('/') or path.endswith('\\'):
-                    normalized.append('uv run godotter runtime lint --project .')
+                    normalized.append('uv run godotter runtime lint --project . --headless')
                 else:
-                    normalized.append(f'uv run godotter runtime lint --project . {path}')
+                    normalized.append(f'uv run godotter runtime lint --project . --headless {path}')
             else:
-                normalized.append('uv run godotter runtime lint --project .')
+                normalized.append('uv run godotter runtime lint --project . --headless')
             continue
 
         if 'headless_run' in lower or 'headless run' in lower:
@@ -1883,6 +1889,7 @@ def runtime_lint_command(
     path: str | None = typer.Argument(None, help='Path to a specific script file (lints entire project if omitted).'),
     timeout: int = typer.Option(60, '--timeout', help='Timeout in seconds for the lint operation.'),
     project: str | None = typer.Option(None, '--project', help='Project name or path (uses default project if omitted).'),
+    headless: bool = typer.Option(True, '--headless/--no-headless', help='Run Godot editor in headless mode.'),
     fail_on_stderr: str = typer.Option(
         'SCRIPT ERROR:;Parse Error:;ERROR:',
         '--fail-on-stderr',
