@@ -1461,7 +1461,7 @@ function stopPlay() {
   const status = document.getElementById("play-status");
   frame.src = "";
   _playBuildId = null;
-  msg.textContent = "已停止。点击"构建并运行"重新预览。";
+  msg.textContent = "已停止。点击「构建并运行」重新预览。";
   status.textContent = "停止";
   status.className = "badge";
 }
