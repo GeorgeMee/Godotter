@@ -2265,9 +2265,6 @@ def project_build_download(name: str, build_id: str, artifact_path: str, request
     return FileResponse(path, filename=path.name)
 
 
-@app.delete('/api/projects/{name}/builds/{build_id}')
-
-
 @app.post('/api/projects/{name}/builds/install-template')
 async def project_builds_install_template(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
