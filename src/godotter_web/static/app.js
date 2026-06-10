@@ -1406,17 +1406,31 @@ document.getElementById("new-chat").addEventListener("click", async () => {
     document.getElementById("session-status").textContent = "请先选择工作区。";
     return;
   }
-  const created = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/sessions`, {
-    method: "POST",
-    headers: {"content-type": "application/json"},
-    body: JSON.stringify({title: "New chat"}),
-  });
-  currentSession = created.session;
+  if (runPollTimer) {
+    clearTimeout(runPollTimer);
+    runPollTimer = null;
+  }
+  currentRun = null;
+  currentSession = null;
   latestReview = null;
-  localStorage.setItem(selectedSessionKey(currentProject), currentSession.session_id);
-  renderMessages([]);
-  renderReview(null);
-  document.getElementById("session-status").textContent = `当前对话：${currentSession.title}`;
+  nextRunEventIndex = 0;
+  taskRuntimeStatus = {};
+  updateRunControls();
+  document.getElementById("run-status").textContent = "";
+  try {
+    const created = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/sessions`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({title: "New chat"}),
+    });
+    currentSession = created.session;
+    localStorage.setItem(selectedSessionKey(currentProject), currentSession.session_id);
+    renderMessages([]);
+    renderReview(null);
+    document.getElementById("session-status").textContent = `当前对话：${currentSession.title}`;
+  } catch (error) {
+    document.getElementById("session-status").textContent = `创建新对话失败：${error.message}`;
+  }
 });
 
 document.getElementById("cancel-run").addEventListener("click", async () => {
