@@ -1686,6 +1686,7 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
                     rel = matches[0].relative_to(workspace_root).as_posix()
                     return f'uv run godotter runtime lint --project . --headless {rel}'
         return 'uv run godotter runtime lint --project . --headless'
+    return raw
 
 
 def _normalize_verification_commands(commands: list[str]) -> list[str]:
