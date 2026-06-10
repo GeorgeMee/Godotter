@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from godotter.tasks.planpack import PlanTask
@@ -189,3 +190,45 @@ def is_executable_verification(value: str) -> bool:
     if 'headless_run' in lower or 'script_lint' in lower:
         return True
     return False
+
+
+def build_revise_prompt(task: PlanTask, feedback: str, goal: str) -> tuple[str, list[str]]:
+    prompt = '\n'.join(
+        [
+            'A task in an implementation plan failed its verification. Revise it based on reviewer feedback.',
+            '',
+            'Output ONLY valid JSON. No markdown, no backticks, no commentary.',
+            '{',
+            '  "title": "...",',
+            '  "goal": "...",',
+            '  "scope": [...],',
+            '  "acceptance": [...],',
+            '  "verification": [...],',
+            '  "depends_on": [...]',
+            '}',
+            '',
+            'Verification commands must use EXACTLY one of these forms (do not invent subcommands):',
+            '  uv run godotter runtime validate-structure --workspace .',
+            '  uv run godotter runtime validate-managers --workspace .',
+            '  uv run godotter runtime validate-paths --workspace .',
+            '  uv run godotter runtime lint --project .',
+            '  uv run godotter runtime test --project . --kind <KIND> --timeout 30',
+            '  uv run godotter runtime run --project . --scene res://<PATH> --timeout 30',
+            '  uv run godotter runtime verify --workspace . --kind <KIND> --timeout 60',
+            '  uv run pytest tests/ -x -q',
+            'Valid KIND values: system, feature, integration, level-smoke, e2e, all.',
+            '',
+            f'Original plan goal: {goal}',
+            '',
+            f'Original task title: {task.title}',
+            f'Original task goal: {task.goal}',
+            f'Original scope: {json.dumps(task.scope, ensure_ascii=False)}',
+            f'Original acceptance: {json.dumps(task.acceptance, ensure_ascii=False)}',
+            f'Original verification: {json.dumps(task.verification, ensure_ascii=False)}',
+            f'Original dependencies: {json.dumps(task.depends_on, ensure_ascii=False)}',
+            '',
+            f'Reviewer feedback — you MUST address this:',
+            feedback,
+        ]
+    )
+    return prompt, PLAN_CONSTRAINTS.copy()

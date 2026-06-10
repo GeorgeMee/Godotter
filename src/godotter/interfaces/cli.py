@@ -66,6 +66,7 @@ from godotter.tasks.planpack import (
 from godotter.tasks.planning import (
     ScoutPromptRef,
     build_plan_prompt,
+    build_revise_prompt,
     normalize_plan_dependencies,
     validate_plan_tasks,
 )
@@ -996,6 +997,84 @@ def plan_run_command(
         state.task_artifacts[task.id] = {'workpack': wp_path.as_posix()}
         state.updated_at = datetime.now().isoformat(timespec='seconds')
         write_planstate(state_path, state)
+
+
+@plan_app.command('revise', help='Revise a single task in a PlanPack based on reviewer feedback.')
+def plan_revise_command(
+    plan: Path = typer.Option(..., '--plan', help='Path to PlanPack JSON file.'),
+    task: str = typer.Option(..., '--task', help='Task id to revise (e.g. t1).'),
+    feedback: str = typer.Option(..., '--feedback', help='Reviewer feedback describing what went wrong and what to change.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+    brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for planning.'),
+) -> None:
+    base_settings = get_settings()
+    root, settings = _resolve_workspace_root(base_settings, workspace=workspace)
+    pack = load_planpack(plan)
+    task_by_id = {t.id: t for t in pack.tasks}
+    if task not in task_by_id:
+        raise typer.BadParameter(f'Unknown task id: {task} (available: {", ".join(sorted(task_by_id.keys()))})')
+
+    original = task_by_id[task]
+    configure_logging(settings)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    selected_brain = brain or settings.resolved_plan_brain
+    summary = build_project_summary(root)
+    summary_text = render_project_summary(summary) if summary else None
+    agent = Agent(
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'plan_model', None)),
+        settings=settings,
+        registry=registry,
+        memory=memory,
+        mode='plan',
+        brain_name=selected_brain,
+        project_summary=summary_text,
+    )
+    agent.brain.tools = []
+    if hasattr(agent.brain, 'tool_choice'):
+        setattr(agent.brain, 'tool_choice', 'none')
+
+    prompt, _constraints = build_revise_prompt(original, feedback, pack.goal)
+    raw = agent.handle_input(prompt)
+    raw_stripped = raw.strip()
+
+    try:
+        parsed = json.loads(raw_stripped)
+    except Exception:
+        end = raw_stripped.rfind('}')
+        if end == -1:
+            raise typer.BadParameter('Planner did not return JSON for task revision.')
+        start = raw_stripped.rfind('{', 0, end)
+        if start == -1:
+            raise typer.BadParameter('Planner did not return JSON for task revision.')
+        try:
+            parsed = json.loads(raw_stripped[start : end + 1])
+        except Exception as exc:
+            raise typer.BadParameter(f'Planner returned invalid JSON for task revision: {exc}') from exc
+
+    revised = PlanTask(
+        id=original.id,
+        title=str(parsed.get('title', '')).strip() or original.title,
+        goal=str(parsed.get('goal', '')).strip() or original.goal,
+        depends_on=[str(x) for x in parsed.get('depends_on', original.depends_on) if x],
+        scope=[str(x) for x in parsed.get('scope', original.scope) if x],
+        acceptance=[str(x) for x in parsed.get('acceptance', original.acceptance) if x],
+        verification=[str(x) for x in parsed.get('verification', original.verification) if x],
+    )
+
+    for i, t in enumerate(pack.tasks):
+        if t.id == task:
+            pack.tasks[i] = revised
+            break
+
+    write_planpack(root, pack)
+    typer.echo(f'revised_task={task}')
+    typer.echo(f'plan={plan.as_posix()}')
+
 
 @project_app.command('new', help='Create a new Godot project with a minimal runnable scaffold.')
 def project_new_command(

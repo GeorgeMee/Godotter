@@ -1028,6 +1028,40 @@ def _execute_run_job_sync(workspace_root: Path, session_id: str, run_id: str) ->
     commands: list[dict[str, object]] = []
     exit_codes: list[int] = []
     for task_id in run.get('task_ids', []):
+        review = _load_review(workspace_root, session_id, str(run.get('review_id', '')))
+        items = review.get('items', []) if isinstance(review, dict) else []
+        item_comment = ''
+        for item in items:
+            if isinstance(item, dict) and item.get('item_id') == task_id:
+                item_comment = str(item.get('comment', '')).strip()
+                break
+        if item_comment:
+            revise_command = [
+                'uv',
+                'run',
+                'godotter',
+                'plan',
+                'revise',
+                '--plan',
+                planpack_path,
+                '--task',
+                str(task_id),
+                '--feedback',
+                item_comment,
+                '--workspace',
+                workspace_root.as_posix(),
+            ]
+            _append_run_event(workspace_root, session_id, run_id, {'type': 'revise', 'task_id': task_id, 'message': ' '.join(revise_command)})
+            revise_process = subprocess.run(
+                revise_command,
+                cwd=_repo_root(),
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=300,
+            )
+            _append_run_event(workspace_root, session_id, run_id, {'type': 'revise_done', 'task_id': task_id, 'exit_code': revise_process.returncode, 'stdout': revise_process.stdout[-1000:] if revise_process.stdout else ''})
         command = [
             'uv',
             'run',

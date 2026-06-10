@@ -24,7 +24,7 @@ class GodotRunner:
         return self._run(['--headless', '-s', file_path, '--check-only'], timeout=timeout)
 
     def lint_project(self, timeout: int = 60) -> GodotRunResult:
-        return self._run(['--quit'], timeout=timeout)
+        return self._run(['--headless', '--quit'], timeout=timeout)
 
     def run_project(
         self,

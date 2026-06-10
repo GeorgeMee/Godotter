@@ -181,12 +181,18 @@ textarea {
   font-size: 15px;
 }
 .nav-sidebar-close {
+  width: 28px;
+  height: 28px;
+  min-width: unset;
+  min-height: unset;
   background: transparent;
   border: none;
   color: var(--muted);
   font-size: 18px;
+  font-weight: 400;
   cursor: pointer;
-  padding: 4px;
+  padding: 0;
+  line-height: 1;
 }
 .nav-sidebar-links {
   display: flex;
@@ -1164,12 +1170,17 @@ small {
 }
 
 .build-delete-btn {
+  width: 28px;
+  height: 28px;
+  min-width: unset;
+  min-height: unset;
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
   font-size: 1.1rem;
+  font-weight: 400;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0;
   margin-left: auto;
   border-radius: 4px;
   line-height: 1;
