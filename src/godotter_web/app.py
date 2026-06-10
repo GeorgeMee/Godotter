@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import html
 import json
@@ -17,11 +17,12 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from godotter.agent import Agent
 from godotter.config import get_settings
-from godotter.context import Memory
+from godotter.context import Memory, build_project_summary, render_project_summary, build_chat_scout_context
 from godotter.llm import create_brain
 from godotter.operations.projects import scaffold_godot_project
 from godotter.project_registry import load_project_registry
 from godotter.runtime.builds import list_build_reports, run_export_build, run_export_doctor
+from godotter.utils.envfile import EnvFile
 from godotter.tasks.planpack import (
     PlanPack,
     PlanState,
@@ -74,7 +75,9 @@ def _projects_path() -> Path:
 
 
 def _default_new_project_parent() -> Path:
-    return _repo_root() / 'tmp'
+    settings = get_settings()
+    root = Path(settings.projects_root)
+    return root.resolve() if root.is_absolute() else (_repo_root() / root).resolve()
 
 
 def _validate_project_name(name: str) -> str:
@@ -107,10 +110,8 @@ def _write_projects_toml(default_project: str | None, projects: dict[str, dict[s
     _projects_path().write_text('\n'.join(lines).rstrip() + '\n', encoding='utf-8', newline='\n')
 
 
-def _register_project(name: str, workspace_root: Path, *, set_default: bool = True) -> None:
+def _registered_project_entries() -> dict[str, dict[str, object]]:
     registry = load_project_registry(_projects_path())
-    if name in registry.projects:
-        raise HTTPException(status_code=409, detail='project_already_registered')
     projects: dict[str, dict[str, object]] = {}
     for existing_name, entry in registry.projects.items():
         projects[existing_name] = {
@@ -119,8 +120,53 @@ def _register_project(name: str, workspace_root: Path, *, set_default: bool = Tr
             'main_scene': entry.main_scene,
             'platform': entry.platform,
         }
+    return projects
+
+
+def _set_env_key(key: str, value: str) -> None:
+    path = _env_path()
+    text = path.read_text(encoding='utf-8-sig') if path.exists() else ''
+    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    output: list[str] = []
+    replaced = False
+    prefix = f'{key}='
+    for line in lines:
+        if line.startswith(prefix):
+            output.append(f'{key}={value}')
+            replaced = True
+        else:
+            output.append(line)
+    while output and output[-1] == '':
+        output.pop()
+    if not replaced:
+        output.append(f'{key}={value}')
+    _write_env_text(path, '\n'.join(output) + '\n')
+
+
+def _set_default_project(name: str) -> dict[str, object]:
+    normalized = _validate_project_name(name)
+    registry = load_project_registry(_projects_path())
+    if normalized not in registry.projects:
+        raise HTTPException(status_code=404, detail='unknown_project')
+    _write_projects_toml(normalized, _registered_project_entries())
+    _set_env_key('GODOTTER_DEFAULT_PROJECT', normalized)
+    return {
+        'ok': True,
+        'default_project': normalized,
+        'projects': list(_registered_projects().values()),
+    }
+
+
+def _register_project(name: str, workspace_root: Path, *, set_default: bool = True) -> None:
+    registry = load_project_registry(_projects_path())
+    if name in registry.projects:
+        raise HTTPException(status_code=409, detail='project_already_registered')
+    projects = _registered_project_entries()
     projects[name] = {'workspace_root': workspace_root.resolve().as_posix()}
-    _write_projects_toml(name if set_default else registry.default_project, projects)
+    default_project = name if set_default else registry.default_project
+    _write_projects_toml(default_project, projects)
+    if set_default:
+        _set_env_key('GODOTTER_DEFAULT_PROJECT', name)
 
 
 def _registered_projects() -> dict[str, dict[str, object]]:
@@ -199,7 +245,7 @@ def _project_tree(
     rel_path: str = '',
     *,
     max_depth: int = 3,
-    max_entries: int = 300,
+    max_entries: int = 800,
 ) -> dict[str, object]:
     safe_rel = _safe_project_relpath(rel_path)
     root = workspace_root.resolve()
@@ -210,7 +256,36 @@ def _project_tree(
         raise HTTPException(status_code=404, detail='directory_not_found')
     counter = {'count': 0, 'truncated': False}
 
+    git_statuses: dict[str, str] = {}
+    if (root / '.git').exists():
+        try:
+            import subprocess
+            completed = subprocess.run(
+                ['git', 'status', '--porcelain', '-u'],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in completed.stdout.splitlines():
+                stripped = line.strip()
+                if len(stripped) >= 2:
+                    code = stripped[:2].strip()
+                    fpath = stripped[3:].strip()
+                    if '->' in fpath:
+                        fpath = fpath.split('->')[-1].strip()
+                    fpath = fpath.replace('\\', '/')
+                    if code == '??':
+                        git_statuses[fpath] = 'untracked'
+                    elif code == 'M ' or code == 'AM':
+                        git_statuses[fpath] = 'staged'
+                    elif code in (' M', 'MM', 'MD'):
+                        git_statuses[fpath] = 'modified'
+        except Exception:
+            pass
+
     def walk(path: Path, depth: int) -> dict[str, object]:
+        total_size = 0
         counter['count'] += 1
         try:
             relative = path.relative_to(root).as_posix()
@@ -223,6 +298,8 @@ def _project_tree(
         }
         if path.is_file():
             node['size'] = path.stat().st_size
+            if relative in git_statuses:
+                node['git_status'] = git_statuses[relative]
             return node
         if depth <= 0 or counter['count'] >= max_entries:
             node['children'] = []
@@ -231,7 +308,7 @@ def _project_tree(
             return node
         children: list[dict[str, object]] = []
         for child in sorted(path.iterdir(), key=lambda item: (item.is_file(), item.name.lower())):
-            if child.name in {'.git', '.godotter', '.import', '.venv', '__pycache__'}:
+            if child.name in {'.git', '.godot', '.godotter', '.import', '.venv', '__pycache__', 'android'}:
                 continue
             if child.name == '.gitkeep':
                 continue
@@ -240,8 +317,20 @@ def _project_tree(
             if counter['count'] >= max_entries:
                 counter['truncated'] = True
                 break
-            children.append(walk(child, depth - 1))
+            child_node = walk(child, depth - 1)
+            children.append(child_node)
+            if isinstance(child_node.get('size'), int):
+                total_size += child_node['size']
         node['children'] = children
+        node['size'] = total_size
+        child_statuses = {c.get('git_status', '') for c in children if c.get('git_status')}
+        if child_statuses:
+            if 'modified' in child_statuses:
+                node['git_status'] = 'modified'
+            elif 'staged' in child_statuses:
+                node['git_status'] = 'staged'
+            elif 'untracked' in child_statuses:
+                node['git_status'] = 'untracked'
         return node
 
     return {
@@ -302,6 +391,16 @@ def _git_status_summary(workspace_root: Path) -> dict[str, object]:
         'commits': commits,
         'recent_commits': [commit['line'] for commit in commits],
     }
+
+
+def _ensure_gitignore_excludes_godotter(workspace_root: Path) -> None:
+    path = workspace_root / '.gitignore'
+    existing = path.read_text(encoding='utf-8') if path.exists() else ''
+    lines = [line.strip() for line in existing.splitlines()]
+    if '.godotter/' in lines or '.godotter' in lines:
+        return
+    suffix = '\n' if existing and not existing.endswith('\n') else ''
+    path.write_text(existing + f'{suffix}\n# Godotter local state\n.godotter/\n', encoding='utf-8', newline='\n')
 
 
 def _parse_git_branches(output: str) -> list[dict[str, object]]:
@@ -455,7 +554,18 @@ def _load_review(workspace_root: Path, session_id: str, review_id: str) -> dict[
     path = _review_path(workspace_root, session_id, review_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail='review_not_found')
-    return _read_json(path)
+    review = _read_json(path)
+    planpack_path = str(review.get('planpack_path') or '').strip()
+    if planpack_path:
+        state_path = plan_state_path(Path(planpack_path))
+        if not state_path.is_absolute():
+            state_path = workspace_root / state_path
+        try:
+            if state_path.exists():
+                review['plan_state'] = _read_json(state_path)
+        except Exception:
+            pass
+    return review
 
 
 def _save_review(workspace_root: Path, session_id: str, review: dict[str, object]) -> None:
@@ -1047,9 +1157,22 @@ def _parse_planner_json(raw: str, workspace_root: Path) -> dict[str, object]:
     try:
         parsed = json.loads(raw_stripped)
     except Exception:
-        start = raw_stripped.find('{')
         end = raw_stripped.rfind('}')
-        if start == -1 or end == -1 or end <= start:
+        if end == -1:
+            debug_path = workspace_root / '.godotter' / 'plans' / 'last_planner_output.txt'
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
+            raise HTTPException(
+                status_code=502,
+                detail=f'planner_did_not_return_json saved={debug_path.as_posix()}',
+            )
+        # Find "tasks" keyword first, then locate the root { before it.
+        tasks_pos = raw_stripped.rfind('"tasks"', 0, end)
+        if tasks_pos != -1:
+            start = raw_stripped.rfind('{', 0, tasks_pos)
+        else:
+            start = raw_stripped.rfind('{', 0, end)
+        if start == -1 or end <= start:
             debug_path = workspace_root / '.godotter' / 'plans' / 'last_planner_output.txt'
             debug_path.parent.mkdir(parents=True, exist_ok=True)
             debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
@@ -1107,20 +1230,30 @@ def _plan_tasks_from_json(parsed: dict[str, object]) -> list[PlanTask]:
     return tasks
 
 
-def _generate_planpack(workspace_root: Path, goal: str, *, brain_name: str | None = None) -> tuple[PlanPack, Path]:
+def _generate_planpack(
+    workspace_root: Path,
+    goal: str,
+    *,
+    brain_name: str | None = None,
+) -> tuple[PlanPack, Path]:
     base_settings = get_settings()
     settings = base_settings.model_copy(update={'workspace_root': workspace_root})
     memory = Memory(settings.resolved_memory_path)
     registry = ToolRegistry(build_default_tools())
-    selected_brain = brain_name or settings.default_brain
+    selected_brain = brain_name or settings.resolved_plan_brain
+    summary = build_project_summary(workspace_root)
+    summary_text = render_project_summary(summary) if summary else None
     agent = Agent(
-        brain=create_brain(settings, selected_brain),
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'plan_model', None)),
         settings=settings,
         registry=registry,
         memory=memory,
         mode='plan',
         brain_name=selected_brain,
+        project_summary=summary_text,
     )
+    # Plan generation is a single-shot JSON prompt with no chat history.
+    # Tools are disabled to force pure JSON output.
     agent.brain.tools = []
     if hasattr(agent.brain, 'tool_choice'):
         setattr(agent.brain, 'tool_choice', 'none')
@@ -1157,32 +1290,44 @@ def _generate_planpack(workspace_root: Path, goal: str, *, brain_name: str | Non
 def _generate_chat_reply(workspace_root: Path, messages: list[dict[str, object]], *, brain_name: str | None = None) -> str:
     base_settings = get_settings()
     settings = base_settings.model_copy(update={'workspace_root': workspace_root})
-    selected_brain = brain_name or settings.default_brain
-    brain = create_brain(settings, selected_brain)
-    brain.tools = []
-    if hasattr(brain, 'tool_choice'):
-        setattr(brain, 'tool_choice', 'none')
+    selected_brain = brain_name or settings.resolved_chat_brain
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
 
-    conversation: list[dict[str, object]] = [
-        {
-            'role': 'system',
-            'content': (
-                'You are Godotter Web Console assistant. Reply conversationally and concisely in Chinese by default. '
-                'Do not execute tasks and do not create a PlanPack in chat replies. '
-                'If the user wants implementation planning, tell them to use the Generate Plan button.'
-            ),
-        }
-    ]
-    for message in messages[-20:]:
-        role = str(message.get('role', ''))
+    summary = build_project_summary(workspace_root)
+    summary_text = render_project_summary(summary) if summary else None
+
+    agent = Agent(
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'chat_model', None)),
+        settings=settings,
+        registry=registry,
+        memory=memory,
+        mode='plan',
+        brain_name=selected_brain,
+        project_summary=summary_text,
+    )
+
+    for msg in messages[-20:]:
+        role = str(msg.get('role', ''))
         if role not in {'user', 'assistant'}:
             continue
-        content = str(message.get('content', '')).strip()
+        content = str(msg.get('content', '')).strip()
         if content:
-            conversation.append({'role': role, 'content': content})
+            agent.conversation.append({'role': role, 'content': content})
 
-    thought = brain.think(conversation)
-    return (thought.text or '').strip() or '我收到消息了。'
+    last_user_msg = ''
+    for m in reversed(messages):
+        if str(m.get('role', '')) == 'user':
+            last_user_msg = str(m.get('content', '')).strip()
+            break
+
+    enriched_message = last_user_msg
+    scout_context = build_chat_scout_context(workspace_root, last_user_msg) if last_user_msg else None
+    if scout_context:
+        enriched_message = f'{last_user_msg}\n\n--- Relevant project context (auto-scanned) ---\n{scout_context}'
+
+    agent.conversation.append({'role': 'user', 'content': enriched_message})
+    return agent._agentic_loop()
 
 
 def _create_plan_review(
@@ -1205,6 +1350,10 @@ def _create_plan_review(
                 'item_id': task.id,
                 'title': task.title,
                 'goal': task.goal,
+                'scope': task.scope,
+                'acceptance': task.acceptance,
+                'verification': task.verification,
+                'depends_on': task.depends_on,
                 'status': 'needs_review',
                 'comment': '',
                 'approved_at': None,
@@ -1236,6 +1385,499 @@ def _write_env_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = text.replace('\r\n', '\n').replace('\r', '\n')
     path.write_bytes(normalized.encode('utf-8'))
+
+
+def _secondary_page(
+    *,
+    title: str,
+    eyebrow: str,
+    summary: str,
+    current: str,
+    body_html: str,
+    script_html: str = '',
+) -> str:
+    title_text = html.escape(title)
+    return f"""<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title_text}</title>
+    <style>
+      :root {{
+        color-scheme: dark;
+        --bg: #0f141c;
+        --bg-soft: #151b24;
+        --panel: rgba(22, 28, 38, 0.9);
+        --panel-2: rgba(18, 23, 32, 0.92);
+        --line: rgba(148, 163, 184, 0.18);
+        --line-strong: rgba(96, 165, 250, 0.35);
+        --text: #edf2f7;
+        --muted: #97a6ba;
+        --accent: #4f8cff;
+        --accent-2: #78a9ff;
+        --accent-soft: rgba(79, 140, 255, 0.16);
+        font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+      }}
+      * {{ box-sizing: border-box; }}
+      body {{
+        margin: 0;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(79, 140, 255, 0.18), transparent 28rem),
+          linear-gradient(180deg, #0b1016 0%, var(--bg) 100%);
+      }}
+      a, button, input, textarea {{ font: inherit; color: inherit; }}
+      .page {{
+        width: min(1380px, 100%);
+        margin: 0 auto;
+        padding: 54px 16px 16px;
+      }}
+       .hero, .panel {{
+         border: 1px solid var(--line);
+         border-radius: 22px;
+         background: var(--panel);
+         box-shadow: 0 18px 42px rgba(0, 0, 0, 0.16);
+       }}
+       .hero {{
+         padding: 16px;
+       }}
+      .topbar {{
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 8px 16px;
+        background: rgba(17, 19, 24, 0.95);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--line);
+      }}
+       .topbar a {{
+         text-decoration: none;
+       }}
+       .topbar .brand {{
+         font-weight: 800;
+         font-size: 15px;
+         color: var(--text);
+         margin-right: 12px;
+       }}
+       .topbar .tab {{
+         display: inline-flex;
+         min-height: 36px;
+         align-items: center;
+         padding: 0 14px;
+         border: 1px solid var(--line);
+         border-radius: 10px;
+         font-size: 13px;
+         font-weight: 700;
+         color: var(--muted);
+         background: transparent;
+         transition: border-color 0.15s, background 0.15s, color 0.15s;
+       }}
+       .topbar .tab:hover {{
+         border-color: var(--line-strong);
+         color: var(--text);
+       }}
+       .topbar .tab.active {{
+         border-color: var(--line-strong);
+         color: #d8e6ff;
+         background: var(--accent-soft);
+       }}
+      .eyebrow {{
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }}
+      h1, h2, h3, p {{ margin: 0; }}
+      h1 {{
+        font-size: clamp(24px, 4vw, 34px);
+        line-height: 1.12;
+      }}
+      h2 {{
+        font-size: 18px;
+        line-height: 1.25;
+      }}
+      h3 {{
+        font-size: 14px;
+        line-height: 1.3;
+      }}
+      .subtle, .muted, small {{
+        color: var(--muted);
+      }}
+      .nav-link, .nav-button, .button, button {{
+        display: inline-flex;
+        min-height: 44px;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0 14px;
+        text-decoration: none;
+        background: rgba(255, 255, 255, 0.02);
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }}
+      .nav-link:hover, .nav-button:hover, .button:hover, button:hover {{
+        border-color: var(--line-strong);
+        background: rgba(255, 255, 255, 0.05);
+      }}
+      .nav-link.active {{
+        border-color: var(--line-strong);
+        color: #d8e6ff;
+        background: var(--accent-soft);
+      }}
+      .panel {{
+        padding: 18px;
+      }}
+      .panel-stack {{
+        display: grid;
+        gap: 14px;
+      }}
+      .panel-head {{
+        display: grid;
+        gap: 6px;
+        margin-bottom: 14px;
+      }}
+      .card-grid {{
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }}
+      .card {{
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        background: var(--panel-2);
+      }}
+      .row {{
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }}
+      .form {{
+        display: grid;
+        gap: 10px;
+      }}
+      input, textarea, select {{
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px 14px;
+        color: var(--text);
+        background: rgba(10, 14, 20, 0.88);
+      }}
+      textarea {{
+        min-height: 260px;
+        resize: vertical;
+        font-family: Consolas, "SFMono-Regular", monospace;
+      }}
+      code, pre {{
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(9, 12, 17, 0.92);
+      }}
+      code {{
+        padding: 2px 6px;
+      }}
+      pre {{
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        white-space: pre-wrap;
+      }}
+      .project-list, .items, .qa {{
+        display: grid;
+        gap: 10px;
+      }}
+      .project-button {{
+        width: 100%;
+        justify-content: space-between;
+        text-align: left;
+      }}
+      .project-button.active {{
+        border-color: var(--line-strong);
+        background: var(--accent-soft);
+      }}
+      .qa-item {{
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(12, 16, 23, 0.76);
+      }}
+      .qa-item p {{
+        margin: 6px 0 10px;
+      }}
+      .actions {{
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }}
+      .mono {{
+        font-family: Consolas, "SFMono-Regular", monospace;
+      }}
+      @media (max-width: 800px) {{
+        .card-grid {{
+          grid-template-columns: 1fr;
+        }}
+      }}
+      @media (max-width: 640px) {{
+        .page {{
+          padding: 10px;
+        }}
+        .hero, .panel {{
+          border-radius: 18px;
+        }}
+        .hero {{
+          padding: 14px;
+        }}
+        .panel {{
+          padding: 14px;
+        }}
+        .actions {{
+          display: grid;
+        }}
+      }}
+
+      .settings-row {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 36px;
+        padding: 4px 0;
+      }}
+      .settings-row .settings-label {{
+        width: 90px;
+        flex-shrink: 0;
+        font-size: 0.85rem;
+        color: var(--text);
+      }}
+      .settings-row code {{
+        flex: 1;
+        font-size: 0.8rem;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .settings-row .env-set-btn {{
+        font-size: 0.72rem;
+        padding: 4px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        white-space: nowrap;
+      }}
+      .settings-row .env-set-btn:hover {{
+        color: var(--text);
+        border-color: var(--line-strong);
+      }}
+      .settings-inline {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 36px;
+      }}
+      .settings-inline select {{
+        flex: 1;
+      }}
+      .settings-inline code {{
+        flex: 1;
+        font-size: 0.8rem;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .settings-inline button {{
+        white-space: nowrap;
+      }}
+      .settings-inline .env-set-btn {{
+        font-size: 0.72rem;
+        padding: 4px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        white-space: nowrap;
+      }}
+      .settings-inline .env-set-btn:hover {{
+        color: var(--text);
+        border-color: var(--line-strong);
+      }}
+
+      .burger {{
+        display: none;
+        min-height: 32px;
+        min-width: 32px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 16px;
+        cursor: pointer;
+      }}
+      .burger:hover {{
+        border-color: var(--line-strong);
+        color: var(--text);
+      }}
+
+      .gtabs-desktop {{
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }}
+
+      .nav-overlay {{
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        background: rgba(0,0,0,0.5);
+      }}
+      .nav-overlay:not([hidden]) {{
+        display: flex;
+      }}
+      .nav-sidebar {{
+        width: min(80vw, 280px);
+        height: 100%;
+        background: rgba(15,20,28,0.98);
+        backdrop-filter: blur(10px);
+        border-right: 1px solid var(--line);
+        padding: 16px;
+        overflow-y: auto;
+      }}
+      .nav-sidebar-head {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        font-weight: 700;
+        font-size: 15px;
+      }}
+      .nav-sidebar-close {{
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font-size: 18px;
+        cursor: pointer;
+        padding: 4px;
+      }}
+      .nav-sidebar-links {{
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }}
+      .nav-sidebar-links a,
+      .nav-sidebar-links button {{
+        display: block;
+        padding: 10px 12px;
+        border-radius: 8px;
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 600;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        text-align: left;
+        width: 100%;
+      }}
+      .nav-sidebar-links a:hover,
+      .nav-sidebar-links button:hover {{
+        background: rgba(255,255,255,0.05);
+        color: var(--text);
+      }}
+      .nav-sidebar-links a.active {{
+        color: #93c5fd;
+        background: rgba(59,130,246,0.12);
+      }}
+      .nav-sidebar-links hr {{
+        border: none;
+        border-top: 1px solid var(--line);
+        margin: 8px 0;
+      }}
+
+      @media (max-width: 768px) {{
+        .topbar .brand {{
+          margin-right: auto;
+        }}
+        .burger {{
+          display: inline-flex;
+        }}
+        .gtabs-desktop {{
+          display: none;
+        }}
+      }}
+      @media (min-width: 769px) {{
+        .nav-overlay {{
+          display: none !important;
+        }}
+      }}
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <nav class="topbar">
+        <button class="burger" id="burger-btn" aria-label="菜单">☰</button>
+        <span class="brand">Godotter</span>
+        <div class="gtabs-desktop">
+          <a class="tab{' active' if current == 'Projects' else ''}" href="/projects">Projects</a>
+          <a class="tab{' active' if current == 'Workspace' else ''}" href="/">Workspace</a>
+          <a class="tab{' active' if current == 'Settings' else ''}" href="/settings">Settings</a>
+        </div>
+      </nav>
+      <div class="nav-overlay" id="nav-overlay" hidden>
+        <div class="nav-sidebar">
+          <div class="nav-sidebar-head">
+            <span>Godotter</span>
+            <button class="nav-sidebar-close" id="nav-close">✕</button>
+          </div>
+          <nav class="nav-sidebar-links">
+            <a href="/"{' class="active"' if current == 'Workspace' else ''}>Workspace</a>
+            <a href="/projects"{' class="active"' if current == 'Projects' else ''}>Projects</a>
+            <a href="/settings"{' class="active"' if current == 'Settings' else ''}>Settings</a>
+          </nav>
+        </div>
+      </div>
+      {body_html}
+    </main>
+    <script>
+      document.getElementById("burger-btn").addEventListener("click", () => {{
+        document.getElementById("nav-overlay").hidden = false;
+      }});
+      document.getElementById("nav-close").addEventListener("click", () => {{
+        document.getElementById("nav-overlay").hidden = true;
+      }});
+      document.getElementById("nav-overlay").addEventListener("click", (e) => {{
+        if (e.target === document.getElementById("nav-overlay")) {{
+          document.getElementById("nav-overlay").hidden = true;
+        }}
+      }});
+      for (const link of document.querySelectorAll(".nav-sidebar-links a")) {{
+        link.addEventListener("click", () => {{
+          document.getElementById("nav-overlay").hidden = true;
+        }});
+      }}
+    </script>
+    {script_html}
+  </body>
+</html>
+"""
 
 
 @app.get('/health')
@@ -1293,6 +1935,27 @@ def projects_list(request: Request) -> dict[str, object]:
     }
 
 
+@app.get('/api/projects-root')
+def projects_root_get() -> dict[str, object]:
+    path = _default_new_project_parent()
+    return {'ok': True, 'path': path.as_posix(), 'exists': path.exists()}
+
+
+@app.post('/api/projects-root')
+async def projects_root_set(request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    path = str(payload.get('path', '')).strip()
+    if not path:
+        raise HTTPException(status_code=400, detail='path_required')
+    EnvFile(Path('.env')).set('GODOTTER_PROJECTS_ROOT', path)
+    get_settings.cache_clear()
+    return {'ok': True, 'path': path}
+
+
 @app.post('/api/projects')
 async def project_create(request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
@@ -1316,6 +1979,12 @@ async def project_create(request: Request) -> dict[str, object]:
         'is_default': bool(payload.get('set_default', True)),
         'git_initialized': result.git_initialized,
     }
+
+
+@app.post('/api/projects/{name}/default')
+def project_set_default(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    return _set_default_project(name)
 
 
 @app.get('/api/projects/{name}/summary')
@@ -1345,7 +2014,7 @@ def project_tree(name: str, request: Request, path: str = '', max_depth: int = 3
     _require_token_if_configured(request)
     root = _project_root_or_404(name)
     depth = max(0, min(max_depth, 8))
-    return {'ok': True, 'name': name, **_project_tree(root, path, max_depth=depth)}
+    return {'ok': True, 'name': name, **_project_tree(root, path, max_depth=depth, max_entries=800)}
 
 
 @app.get('/api/projects/{name}/plans')
@@ -1370,6 +2039,90 @@ def project_workpacks(name: str, request: Request) -> dict[str, object]:
     }
 
 
+@app.post('/api/config')
+async def config_set(request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    key = str(payload.get('key', '')).strip()
+    value = str(payload.get('value', '')).strip()
+    if not key:
+        raise HTTPException(status_code=400, detail='config_key_required')
+    EnvFile(Path('.env')).set(key, value)
+    get_settings.cache_clear()
+    return {'ok': True, 'key': key, 'value': value}
+
+
+@app.get('/api/models')
+def models_list(provider: str = '') -> dict[str, object]:
+    from godotter.llm.catalog import list_models
+    settings = get_settings()
+    selected = (provider or settings.default_brain).strip().lower()
+    if selected == 'stub':
+        return {'ok': True, 'provider': 'stub', 'models': ['stub']}
+    try:
+        models = list_models(settings, selected)
+        return {'ok': True, 'provider': selected, 'models': models}
+    except Exception as exc:
+        return {'ok': False, 'error': str(exc)}
+
+
+@app.get('/api/keys')
+def api_keys_list() -> dict[str, object]:
+    settings = get_settings()
+    return {
+        'ok': True,
+        'keys': {
+            'deepseek': settings.deepseek_api_key,
+            'siliconflow': settings.siliconflow_api_key,
+            'alibaba': settings.alibaba_api_key,
+            'moonshot': settings.moonshot_api_key,
+        },
+    }
+
+
+@app.get('/api/config-state')
+def config_state() -> dict[str, object]:
+    settings = get_settings()
+    providers = ['deepseek', 'siliconflow', 'alibaba', 'moonshot']
+    provider_models = {}
+    for p in providers:
+        model = getattr(settings, f'{p}_model', '') or ''
+        provider_models[p] = model
+    return {
+        'ok': True,
+        'config': {
+            'default_brain': settings.default_brain,
+            'chat_brain': settings.resolved_chat_brain,
+            'plan_brain': settings.resolved_plan_brain,
+            'act_brain': settings.resolved_act_brain,
+            'chat_model': settings.chat_model or '',
+            'plan_model': settings.plan_model or '',
+            'act_model': settings.act_model or '',
+            'provider_models': provider_models,
+        },
+    }
+
+
+@app.post('/api/keys')
+async def api_keys_set(request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    provider = str(payload.get('provider', '')).strip().lower()
+    key = str(payload.get('key', '')).strip()
+    if provider not in ('deepseek', 'siliconflow', 'alibaba', 'moonshot'):
+        raise HTTPException(status_code=400, detail='invalid_provider')
+    env_name = {'deepseek': 'DEEPSEEK_API_KEY', 'siliconflow': 'SILICONFLOW_API_KEY', 'alibaba': 'ALIBABA_API_KEY', 'moonshot': 'MOONSHOT_API_KEY'}[provider]
+    EnvFile(Path('.env')).set(env_name, key)
+    get_settings.cache_clear()
+    return {'ok': True, 'provider': provider}
+
+
 @app.get('/api/projects/{name}/builds')
 def project_builds(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
@@ -1386,8 +2139,38 @@ def project_build_doctor(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
     root = _project_root_or_404(name)
     settings = get_settings()
-    report = run_export_doctor(workspace_root=root, godot_path=settings.godot_path)
-    return {'ok': report.ok, 'doctor': asdict(report)}
+    report = run_export_doctor(
+        workspace_root=root,
+        godot_path=settings.godot_path,
+        templates_path=settings.export_templates_path,
+        android_sdk_path=settings.android_sdk_path,
+        java_home=settings.java_home,
+        keystore_path=settings.android_keystore_path,
+    )
+    # Auto-detect suggestions for missing configs
+    suggestions: dict[str, object] = {}
+    if not report.android_sdk_path or not report.android_sdk_valid:
+        detected = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+        if detected and Path(detected).exists():
+            suggestions['android_sdk_path'] = detected
+    if not report.java_home or not report.java_valid:
+        detected = os.environ.get("JAVA_HOME")
+        if not detected:
+            import shutil
+            detected = shutil.which("java")
+            if detected:
+                detected = str(Path(detected).resolve().parent.parent)
+        if detected and Path(detected).exists():
+            suggestions['java_home'] = detected
+    if not report.keystore_valid:
+        for candidate in [
+            Path(os.environ.get("APPDATA", "")) / "Godot" / "keystores" / "debug.keystore",
+            Path.home() / ".android" / "debug.keystore",
+        ]:
+            if candidate.exists():
+                suggestions['android_keystore_path'] = candidate.as_posix()
+                break
+    return {'ok': report.ok, 'doctor': asdict(report), 'suggestions': suggestions}
 
 
 @app.post('/api/projects/{name}/builds')
@@ -1433,6 +2216,47 @@ def project_build_download(name: str, build_id: str, artifact_path: str, request
     return FileResponse(path, filename=path.name)
 
 
+@app.delete('/api/projects/{name}/builds/{build_id}')
+
+
+@app.post('/api/projects/{name}/builds/install-template')
+async def project_builds_install_template(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    settings = get_settings()
+    if not settings.godot_path:
+        raise HTTPException(status_code=400, detail='GODOT_PATH is not configured')
+    try:
+        completed = subprocess.run(
+            [settings.godot_path, "--headless", "--path", root.as_posix(), "--install-android-build-template"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        ok = completed.returncode == 0
+        return {
+            'ok': ok,
+            'exit_code': completed.returncode,
+            'stdout': completed.stdout[-2000:] if completed.stdout else '',
+            'stderr': completed.stderr[-500:] if completed.stderr else '',
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail='template_install_timeout')
+
+
+@app.delete('/api/projects/{name}/builds/{build_id}')
+def project_build_delete(name: str, build_id: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    build_id = _validate_id(build_id, prefix='build')
+    build_dir = root / '.godotter' / 'builds' / build_id
+    import shutil
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    return {'ok': True, 'deleted': build_id}
+
+
 @app.get('/api/projects/{name}/git/status')
 def project_git_status(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
@@ -1446,6 +2270,7 @@ def project_git_init(name: str, request: Request) -> dict[str, object]:
     root = _project_root_or_404(name)
     if (root / '.git').exists():
         return {'ok': True, 'already_exists': True, 'git': _git_status_summary(root), 'results': []}
+    _ensure_gitignore_excludes_godotter(root)
     results = [
         _run_git(root, ['init'], require_repo=False),
         _run_git(root, ['add', '.']),
@@ -1633,9 +2458,9 @@ async def project_session_plan_create(name: str, session_id: str, request: Reque
         payload = await request.json()
     except Exception:
         payload = {}
+    messages = _read_messages(root, session_id)
     goal = str(payload.get('goal', '')).strip()
     if not goal:
-        messages = _read_messages(root, session_id)
         for message in reversed(messages):
             if message.get('role') == 'user' and str(message.get('content', '')).strip():
                 goal = str(message['content']).strip()
@@ -1871,77 +2696,55 @@ def project_session_run_events(
     }
 
 
+
+
 @app.get('/projects', response_class=HTMLResponse)
 def projects_page(request: Request) -> str:
     _require_token_if_configured(request)
-    return """<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Godotter Projects</title>
-    <style>
-      :root { color-scheme: dark; }
-      * { box-sizing: border-box; }
-      body { margin: 0; color: #f1f5f9; background: #111318; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
-      main { width: min(1080px, 100%); margin: 0 auto; padding: 16px; }
-      h1 { margin: 10px 0 4px; font-size: 28px; letter-spacing: -0.02em; }
-      h2 { margin: 0 0 8px; font-size: 18px; }
-      a, button, input { color: inherit; font: inherit; }
-      button, .button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; border: 0; border-radius: 10px; padding: 0 14px; background: #2563eb; color: #fff; text-decoration: none; font-weight: 650; }
-      button.secondary, .button.secondary { border: 1px solid #303640; background: transparent; }
-      input { width: 100%; min-height: 40px; border: 1px solid #303640; border-radius: 10px; padding: 0 12px; background: #0b0d11; }
-      .nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-      .muted { color: #9aa3af; }
-      .grid { display: grid; gap: 12px; }
-      .form { display: grid; gap: 8px; margin-bottom: 14px; }
-      .card { border: 1px solid #303640; border-radius: 16px; padding: 14px; background: #181b22; }
-      .project-list { display: grid; gap: 8px; }
-      .project-button { width: 100%; justify-content: space-between; background: #181b22; border: 1px solid #303640; text-align: left; }
-      .project-button.active { border-color: #60a5fa; background: #1d3558; }
-      code, pre { background: #0b0d11; border: 1px solid #303640; border-radius: 12px; }
-      code { padding: 2px 6px; }
-      pre { overflow: auto; padding: 12px; white-space: pre-wrap; }
-      .items { display: grid; gap: 8px; margin-top: 10px; }
-      .item { border: 1px solid #303640; border-radius: 12px; padding: 10px; background: #14171d; }
-      .item strong { display: block; margin-bottom: 4px; }
-      @media (min-width: 860px) { .grid { grid-template-columns: 320px 1fr; align-items: start; } }
-      @media (max-width: 520px) { main { padding: 12px; } button, .button { width: 100%; } }
-    </style>
-  </head>
-  <body>
-    <main>
-      <nav class="nav">
-        <a class="button secondary" href="/">首页</a>
-        <a class="button secondary" href="/config">配置</a>
-        <a class="button secondary" href="/env">.env</a>
-        <a class="button secondary" href="/health">health</a>
-      </nav>
-      <h1>工作区</h1>
-      <p class="muted">选择一个注册项目作为当前聊天工作区。只读取 <code>config/projects.toml</code> 里注册过的项目。</p>
-      <section class="grid">
-        <aside class="card">
-          <h2>可用工作区</h2>
-          <form id="create-project" class="form">
-            <input id="new-project-name" autocomplete="off" placeholder="新项目名，例如 tetris4" />
-            <button type="submit">新建项目并设为工作区</button>
-            <p id="create-status" class="muted"></p>
-          </form>
-          <div id="project-list" class="project-list"></div>
-        </aside>
-        <section class="card">
-          <h2 id="project-title">选择一个项目</h2>
-          <p id="project-path" class="muted"></p>
-          <p><button id="use-workspace" disabled>设为聊天工作区</button></p>
-          <div id="summary"></div>
-          <h2>最近 Plans</h2>
-          <div id="plans" class="items"></div>
-          <h2>最近 WorkPacks</h2>
-          <div id="workpacks" class="items"></div>
-        </section>
+    body_html = """
+       <section class="panel">
+        <div class="panel-head">
+          <p class="eyebrow">Registry</p>
+          <h2>Projects</h2>
+        </div>
+        <div class="card-grid" style="grid-template-columns:1fr 1fr;gap:14px">
+          <section class="card">
+            <div class="panel-stack">
+              <h3>Registered</h3>
+              <p class="muted">Sourced from <code>config/projects.toml</code>.</p>
+              <form id="create-project" class="form">
+                <input id="new-project-name" autocomplete="off" placeholder="New project name" />
+                <button type="submit">Create</button>
+                <p id="create-status" class="muted"></p>
+              </form>
+              <div id="project-list" class="project-list"></div>
+            </div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="panel-stack">
+              <div>
+                <h3 id="project-title">Choose a project</h3>
+                <p id="project-path" class="muted"></p>
+              </div>
+              <div class="actions">
+                <button id="use-workspace" disabled>Use as active workspace</button>
+              </div>
+              <div id="summary"></div>
+              <div>
+                <h3>Recent plans</h3>
+                <div id="plans" class="items"></div>
+              </div>
+              <div>
+                <h3>Recent workpacks</h3>
+                <div id="workpacks" class="items"></div>
+              </div>
+            </div>
+          </section>
+        </div>
       </section>
-    </main>
-    <script>
+    """
+    script_html = """<script>
       async function api(path) {
         const response = await fetch(path);
         if (!response.ok) throw new Error(await response.text());
@@ -1954,8 +2757,8 @@ def projects_page(request: Request) -> str:
           item.created_at ? `created=${item.created_at}` : '',
           item.tasks !== undefined ? `tasks=${item.tasks}` : '',
           item.relevant_files !== undefined ? `files=${item.relevant_files}` : '',
-        ].filter(Boolean).join(' · ');
-        return `<div class="item"><strong>${escapeHtml(title)}</strong><div class="muted">${escapeHtml(meta || item.name)}</div></div>`;
+        ].filter(Boolean).join(' - ');
+        return `<div class="card"><strong>${escapeHtml(title)}</strong><div class="muted">${escapeHtml(meta || item.name)}</div></div>`;
       }
 
       function escapeHtml(value) {
@@ -1980,13 +2783,15 @@ def projects_page(request: Request) -> str:
           latest_plan: summary.latest_plan?.name || null,
           latest_workpack: summary.latest_workpack?.name || null,
         }, null, 2))}</pre>`;
-        document.getElementById('plans').innerHTML = plans.plans.length ? plans.plans.slice(0, 10).map(itemHtml).join('') : '<p class="muted">暂无 PlanPack</p>';
-        document.getElementById('workpacks').innerHTML = workpacks.workpacks.length ? workpacks.workpacks.slice(0, 10).map(itemHtml).join('') : '<p class="muted">暂无 WorkPack</p>';
+        document.getElementById('plans').innerHTML = plans.plans.length ? plans.plans.slice(0, 10).map(itemHtml).join('') : '<p class="muted">No plans yet.</p>';
+        document.getElementById('workpacks').innerHTML = workpacks.workpacks.length ? workpacks.workpacks.slice(0, 10).map(itemHtml).join('') : '<p class="muted">No workpacks yet.</p>';
         document.getElementById('use-workspace').disabled = false;
       }
 
-      document.getElementById('use-workspace').addEventListener('click', () => {
+      document.getElementById('use-workspace').addEventListener('click', async () => {
         if (!selectedProject) return;
+        const response = await fetch(`/api/projects/${encodeURIComponent(selectedProject)}/default`, {method: 'POST'});
+        if (!response.ok) throw new Error(await response.text());
         localStorage.setItem('godotter:selectedProject', selectedProject);
         window.location.href = '/';
       });
@@ -1997,10 +2802,10 @@ def projects_page(request: Request) -> str:
         const status = document.getElementById('create-status');
         const name = nameInput.value.trim();
         if (!name) {
-          status.textContent = '请输入项目名。';
+          status.textContent = 'Project name is required.';
           return;
         }
-        status.textContent = '创建中...';
+        status.textContent = 'Creating...';
         try {
           const created = await fetch('/api/projects', {
             method: 'POST',
@@ -2009,11 +2814,11 @@ def projects_page(request: Request) -> str:
           });
           if (!created.ok) throw new Error(await created.text());
           localStorage.setItem('godotter:selectedProject', name);
-          status.textContent = '已创建。';
+          status.textContent = 'Created.';
           nameInput.value = '';
           await init();
         } catch (error) {
-          status.textContent = `创建失败：${error.message}`;
+          status.textContent = `Create failed: ${error.message}`;
         }
       });
 
@@ -2024,7 +2829,7 @@ def projects_page(request: Request) -> str:
         for (const project of data.projects) {
           const button = document.createElement('button');
           button.className = 'project-button';
-          button.innerHTML = `<span>${escapeHtml(project.name)}${project.is_default ? ' · 默认' : ''}</span><span>${project.exists ? '存在' : '缺失'}</span>`;
+          button.innerHTML = `<span>${escapeHtml(project.name)}${project.is_default ? ' - default' : ''}</span><span>${project.exists ? 'present' : 'missing'}</span>`;
           button.addEventListener('click', () => selectProject(project.name, button));
           list.appendChild(button);
           const saved = localStorage.getItem('godotter:selectedProject');
@@ -2033,76 +2838,257 @@ def projects_page(request: Request) -> str:
           }
         }
         if (!data.projects.length) {
-          list.innerHTML = '<p class="muted">config/projects.toml 没有注册项目。</p>';
+          list.innerHTML = '<p class="muted">No registered projects in config/projects.toml.</p>';
         }
       }
 
       init().catch((error) => {
         document.getElementById('summary').innerHTML = `<pre>${escapeHtml(error.message)}</pre>`;
       });
-    </script>
-  </body>
-</html>
-"""
+    </script>"""
+    return _secondary_page(
+        title='Projects',
+        eyebrow='Workspace',
+        summary='Manage registered game projects and switch which one the web console treats as the active workspace.',
+        current='Projects',
+        body_html=body_html,
+        script_html=script_html,
+    )
+
+
+@app.get('/settings', response_class=HTMLResponse)
+def settings_page(request: Request) -> str:
+    _require_token_if_configured(request)
+    body_html = """
+      <section class="panel">
+        <div class="panel-head">
+          <p class="eyebrow">Settings</p>
+          <h2>全局配置</h2>
+        </div>
+        <div class="card-grid">
+          <section class="card">
+            <h3 style="margin-bottom:10px">API Keys</h3>
+            <div id="api-keys-grid"></div>
+          </section>
+          <section class="card">
+            <h3 style="margin-bottom:10px">Agent</h3>
+            <p class="muted" style="margin-bottom:10px">为 Chat、Plan、Run 分别选择提供商和模型。</p>
+            <div class="agent-table" id="settings-agent-table"></div>
+          </section>
+          <section class="card">
+            <h3 style="margin-bottom:10px">导出环境</h3>
+            <p class="muted" style="margin-bottom:8px">选择一个项目以诊断导出配置。</p>
+            <div class="settings-inline">
+              <select id="settings-doctor-project"><option value="">选择项目...</option></select>
+              <button type="button" id="settings-doctor-run">诊断</button>
+              <span class="muted" id="settings-doctor-status"></span>
+            </div>
+            <div id="settings-env-body" style="margin-top:8px"></div>
+          </section>
+          <section class="card">
+            <h3 style="margin-bottom:10px">项目</h3>
+            <div class="settings-inline">
+              <span class="muted">项目根目录:</span>
+              <code id="settings-projects-root">...</code>
+              <button type="button" id="settings-project-root-edit">修改</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    """
+    script_html = """
+      <script>
+        async function api(path, opts) {
+          const response = await fetch(path, opts);
+          if (!response.ok) throw new Error(await response.text());
+          return response.json();
+        }
+        function esc(v) {
+          return String(v ?? '').replace(/[&<>\"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]));
+        }
+
+        async function loadApiKeys() {
+          const grid = document.getElementById('api-keys-grid');
+          try {
+            const data = await api('/api/keys');
+            const keys = data.keys || {};
+            const providers = ['deepseek', 'siliconflow', 'alibaba', 'moonshot'];
+            grid.innerHTML = providers.map((p) => {
+              const status = keys[p] ? 'configured' : 'not set';
+              const masked = keys[p] ? keys[p].slice(0,4) + '...' + keys[p].slice(-4) : '';
+              return `<div class=\"settings-row\">
+                <span class=\"settings-label\">${p}</span>
+                <code>${status === 'configured' ? masked : '(not set)'}</code>
+                <button type=\"button\" class=\"env-set-btn\" data-provider=\"${p}\" data-value=\"${esc(keys[p] || '')}\">设置</button>
+              </div>`;
+            }).join('');
+            for (const btn of grid.querySelectorAll('.env-set-btn')) {
+              btn.addEventListener('click', () => {
+                const p = btn.dataset.provider;
+                const val = prompt('输入 ' + p.toUpperCase() + ' API Key:', btn.dataset.value || '');
+                if (val === null) return;
+                fetch('/api/keys', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:p,key:val})})
+                  .then(() => loadApiKeys());
+              });
+            }
+          } catch (_) { grid.innerHTML = '<p class=\"muted\">加载失败</p>'; }
+        }
+
+        async function loadAgentSettings() {
+          const table = document.getElementById('settings-agent-table');
+          if (!table) return;
+          try {
+            const cfg = (await api('/api/config-state')).config || {};
+            const providerModels = cfg.provider_models || {};
+            const providers = ['stub','deepseek','siliconflow','alibaba','moonshot'];
+            const tasks = [
+              {key:'chat',label:'Chat',brain:cfg.chat_brain||cfg.default_brain||'stub',model:cfg.chat_model},
+              {key:'plan',label:'Plan',brain:cfg.plan_brain||cfg.default_brain||'stub',model:cfg.plan_model},
+              {key:'act',label:'Run',brain:cfg.act_brain||cfg.default_brain||'stub',model:cfg.act_model},
+            ];
+            table.innerHTML = tasks.map((t) => {
+              const brain = t.brain||'stub';
+              const effModel = t.model || providerModels[brain] || '';
+              return `<div class=\"agent-row\" data-task=\"${t.key}\">
+                <div class=\"agent-task-label\">${t.label}</div>
+                <div class=\"agent-selects\">
+                  <label class=\"agent-inline-label\">提供商</label>
+                  <select class=\"agent-brain-select\" data-task=\"${t.key}\">
+                    ${providers.map((p) => `<option value=\"${p}\" ${p===brain?'selected':''}>${p}</option>`).join('')}
+                  </select>
+                  <label class=\"agent-inline-label\">模型</label>
+                  <select class=\"agent-model-select\" data-task=\"${t.key}\">
+                    ${effModel ? `<option value=\"${esc(effModel)}\" selected>${esc(effModel)}</option>` : '<option value=\"\">(使用默认)</option>'}
+                  </select>
+                </div>
+              </div>`;
+            }).join('');
+            // Wire brain change
+            for (const sel of table.querySelectorAll('.agent-brain-select')) {
+              sel.addEventListener('change', async () => {
+                const task = sel.dataset.task;
+                const key = 'GODOTTER_' + task.toUpperCase() + '_BRAIN';
+                await fetch('/api/config', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,value:sel.value})});
+                loadModelsForTask(task, sel.value);
+              });
+            }
+            // Wire model change
+            for (const sel of table.querySelectorAll('.agent-model-select')) {
+              sel.addEventListener('change', async () => {
+                const task = sel.dataset.task;
+                const key = 'GODOTTER_' + task.toUpperCase() + '_MODEL';
+                await fetch('/api/config', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,value:sel.value})});
+              });
+            }
+          } catch (_) { table.innerHTML = '<p class=\"muted\">加载失败</p>'; }
+        }
+
+        async function loadModelsForTask(taskKey, provider) {
+          const table = document.getElementById('settings-agent-table');
+          const select = table?.querySelector(`.agent-model-select[data-task=\"${taskKey}\"]`);
+          if (!select) return;
+          if (provider === 'stub') { select.innerHTML = '<option value=\"stub\" selected>stub</option>'; return; }
+          const cur = select.value;
+          select.innerHTML = '<option value=\"\">加载中...</option>';
+          try {
+            const r = await api('/api/models?provider=' + encodeURIComponent(provider));
+            select.innerHTML = '<option value=\"\">(使用默认)</option>';
+            for (const m of r.models||[]) {
+              const opt = document.createElement('option');
+              opt.value = m; opt.textContent = m;
+              if (m === cur) opt.selected = true;
+              select.appendChild(opt);
+            }
+          } catch (_) { select.innerHTML = '<option value=\"\">获取失败</option>'; }
+        }
+
+        async function loadProjectsRoot() {
+          try {
+            const data = await api('/api/projects-root');
+            document.getElementById('settings-projects-root').textContent = data.path;
+          } catch (_) {}
+        }
+        document.getElementById('settings-project-root-edit').addEventListener('click', async () => {
+          const cur = document.getElementById('settings-projects-root').textContent;
+          const path = prompt('项目根目录路径:', cur);
+          if (!path || path === cur) return;
+          await fetch('/api/projects-root', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path})});
+          loadProjectsRoot();
+        });
+
+        async function loadBuildDoctor() {
+          const project = document.getElementById('settings-doctor-project').value;
+          const body = document.getElementById('settings-env-body');
+          const status = document.getElementById('settings-doctor-status');
+          if (!project) { body.innerHTML = '<p class=\"muted\">请先选择一个项目。</p>'; return; }
+          status.textContent = '诊断中...';
+          try {
+            const r = await api('/api/projects/' + encodeURIComponent(project) + '/builds/doctor');
+            const d = r.doctor || {};
+            const s = r.suggestions || {};
+            const rows = [
+              ['Godot', d.godot_version||'(未检测)', d.godot_path_exists],
+              ['导出模板', d.templates_detected ? (d.templates_root||'已检测') : '未检测到', d.templates_detected],
+              ['Android SDK', d.android_sdk_valid ? d.android_sdk_path + ' ('+(d.android_build_tools_version||'')+')' : (d.android_sdk_path||'未设置'), d.android_sdk_valid],
+              ['JDK', d.java_valid ? d.java_home + ' ('+(d.java_version||'')+')' : (d.java_home||'未设置'), d.java_valid],
+              ['Keystore', d.keystore_valid ? d.keystore_path : (d.keystore_path||'未设置'), d.keystore_valid],
+              ['Android 模板', d.android_template_installed ? '已安装' : '未安装', d.android_template_installed],
+            ];
+            status.textContent = '';
+            body.innerHTML = rows.map((r) => {
+              const ok = r[2] ? '<span style=\"color:#34d399\">✓</span>' : '<span style=\"color:#f59e0b\">✗</span>';
+              const setBtn = ['安卓SDK','JDK','Keystore'].includes(r[0])
+                ? `<button class=\"env-set-btn\" data-key=\"GODOTTER_ANDROID_${r[0]=='Keystore'?'KEYSTORE':'SDK'}_PATH\" style=\"font-size:0.7rem\">设置</button>`
+                : '';
+              return `<div class=\"settings-row\"><span class=\"settings-label\">${r[0]}</span>${ok}<code>${esc(String(r[1]))}</code>${setBtn}</div>`;
+            }).join('');
+            for (const btn of body.querySelectorAll('.env-set-btn')) {
+              btn.addEventListener('click', () => {
+                const key = btn.dataset.key;
+                const val = prompt('设置 ' + key + ':', s[key.replace('GODOTTER_','').toLowerCase()+'_path'] || '');
+                if (val === null) return;
+                fetch('/api/config', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,value:val})})
+                  .then(() => loadBuildDoctor());
+              });
+            }
+          } catch (_) { body.innerHTML = '<p class=\"muted\">诊断失败</p>'; status.textContent = ''; }
+        }
+
+        document.getElementById('settings-doctor-run').addEventListener('click', loadBuildDoctor);
+
+        async function loadProjects() {
+          try {
+            const data = await api('/api/projects');
+            const sel = document.getElementById('settings-doctor-project');
+            sel.innerHTML = '<option value=\"\">选择项目...</option>';
+            for (const p of data.projects||[]) {
+              const opt = document.createElement('option');
+              opt.value = p.name; opt.textContent = p.name;
+              sel.appendChild(opt);
+            }
+          } catch (_) {}
+        }
+
+        loadApiKeys();
+        loadAgentSettings();
+        loadProjectsRoot();
+        loadProjects();
+      </script>
+    """
+    return _secondary_page(
+        title='Settings - Godotter Web Console',
+        eyebrow='Settings',
+        summary='Configure API keys, Agent providers, export environment, and project settings.',
+        current='Settings',
+        body_html=body_html,
+        script_html=script_html,
+    )
 
 
 @app.get('/config', response_class=HTMLResponse)
 def config_page(request: Request) -> str:
-    _require_token_if_configured(request)
-    env_path = _env_path()
-    return f"""<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Godotter Config</title>
-    <style>
-      body {{ margin: 0; color: #f1f5f9; background: #111318; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }}
-      main {{ width: min(920px, 100%); margin: 0 auto; padding: 16px; }}
-      a, button {{ color: #bfdbfe; }}
-      .card {{ border: 1px solid #303640; border-radius: 16px; padding: 14px; margin: 12px 0; background: #181b22; }}
-      .row {{ display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }}
-      .nav {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }}
-      .muted {{ color: #9aa3af; }}
-      code, pre {{ background: #0b0d11; border: 1px solid #303640; border-radius: 12px; }}
-      code {{ padding: 2px 6px; }}
-      pre {{ overflow: auto; padding: 14px; white-space: pre-wrap; }}
-      .button {{ display: inline-block; min-height: 40px; line-height: 40px; padding: 0 14px; border-radius: 10px; background: #2563eb; color: white; text-decoration: none; font-weight: 650; }}
-      .button.secondary {{ border: 1px solid #303640; background: transparent; }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <nav class="nav">
-        <a class="button secondary" href="/">首页</a>
-        <a class="button secondary" href="/projects">项目</a>
-        <a class="button" href="/env">编辑 .env</a>
-        <a class="button secondary" href="/api/projects.toml">查看 projects.toml</a>
-        <a class="button secondary" href="/health">health</a>
-      </nav>
-      <h1>配置</h1>
-      <section class="card">
-        <div class="row">
-          <div>
-            <h2>.env</h2>
-            <p class="muted"><code>{html.escape(env_path.as_posix())}</code></p>
-          </div>
-          <a class="button" href="/env">编辑 .env</a>
-        </div>
-      </section>
-      <section class="card">
-        <div class="row">
-          <div>
-            <h2>工作区</h2>
-            <p class="muted">项目选择属于聊天工作区，不在系统配置页里直接编辑。</p>
-          </div>
-          <a class="button secondary" href="/projects">选择工作区</a>
-        </div>
-      </section>
-    </main>
-  </body>
-</html>
-"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url='/settings', status_code=302)
 
 
 @app.get('/env', response_class=HTMLResponse)
@@ -2115,86 +3101,49 @@ def env_editor(request: Request) -> str:
     escaped_path = html.escape(path.as_posix())
     escaped_hint = html.escape(hint)
     escaped_content = html.escape(content)
-    return f"""<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Godotter .env Editor</title>
-    <style>
-      :root {{ color-scheme: dark; }}
-      * {{ box-sizing: border-box; }}
-      body {{ margin: 0; color: #f1f5f9; background: #111318; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }}
-      main {{ width: min(980px, 100%); margin: 0 auto; padding: 16px; }}
-      h1 {{ margin: 10px 0 4px; font-size: 28px; letter-spacing: -0.02em; }}
-      h2 {{ margin: 0; font-size: 18px; }}
-      label {{ display: block; color: #cbd5e1; font-weight: 700; }}
-      input, textarea {{ width: 100%; border: 1px solid #303640; border-radius: 12px; padding: 12px; color: #f1f5f9; background: #0b0d11; font: inherit; }}
-      textarea {{ min-height: 44vh; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }}
-      button, .button {{ display:inline-flex; min-height: 40px; align-items:center; justify-content:center; padding: 0 14px; border: 0; border-radius: 10px; background: #2563eb; color: white; text-decoration:none; font-weight: 650; }}
-      button.secondary, .button.secondary {{ border: 1px solid #303640; background: transparent; }}
-      code {{ background: #0b0d11; border: 1px solid #303640; padding: 2px 6px; border-radius: 6px; }}
-      .nav {{ display:flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }}
-      .muted {{ color: #9aa3af; }}
-      .hero {{ margin-bottom: 14px; }}
-      .card {{ border: 1px solid #303640; border-radius: 16px; padding: 14px; margin: 12px 0; background: #181b22; }}
-      .qa {{ display: grid; gap: 12px; }}
-      .qa-item {{ border: 1px solid #303640; border-radius: 14px; padding: 12px; background: #14171d; }}
-      .qa-item p {{ margin: 4px 0 10px; }}
-      .grid {{ display: grid; gap: 10px; }}
-      .actions {{ position: sticky; bottom: 0; display:flex; gap: 10px; align-items:center; flex-wrap: wrap; margin: 14px -16px -16px; padding: 12px 16px; border-top: 1px solid #303640; background: rgba(17, 19, 24, 0.96); }}
-      .status {{ color: #9aa3af; }}
-      @media (min-width: 760px) {{
-        .grid.two {{ grid-template-columns: 1fr 1fr; }}
-      }}
-      @media (max-width: 520px) {{
-        main {{ padding: 12px; }}
-        button, .button {{ width: 100%; }}
-        .actions {{ margin-left: -12px; margin-right: -12px; margin-bottom: -12px; }}
-      }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <nav class="nav">
-        <a class="button secondary" href="/">首页</a>
-        <a class="button secondary" href="/config">配置</a>
-        <a class="button secondary" href="/projects">项目</a>
-        <a class="button secondary" href="/api/projects.toml">projects.toml</a>
-        <a class="button secondary" href="/health">health</a>
-      </nav>
-      <section class="hero">
-        <h1>.env 配置</h1>
-        <p class="muted">路径：<code>{escaped_path}</code> · {escaped_hint}</p>
+    body_html = f"""
+      <section class="panel">
+        <div class="panel-head">
+          <p class="eyebrow">Environment</p>
+          <h2>.env editor</h2>
+          <p class="subtle"><code>{escaped_path}</code> - {escaped_hint}</p>
+        </div>
+        <div class="card-grid">
+          <section class="card">
+            <div class="panel-stack">
+              <div>
+                <h3>Question-driven fields</h3>
+                <p class="muted">Common keys are surfaced as form fields. Unknown keys remain preserved in the raw text below.</p>
+              </div>
+              <div class="qa" id="qa"></div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="panel-stack">
+              <div>
+                <h3>Raw .env text</h3>
+                <p class="muted">Advanced edits still happen directly in the source text. Saving merges the structured answers back into this block.</p>
+              </div>
+              <textarea id="text" spellcheck="false">{escaped_content}</textarea>
+              <div class="actions">
+                <button id="save">Save config</button>
+                <button id="sync" class="secondary">Reload question fields</button>
+                <span id="status" class="status muted"></span>
+              </div>
+            </div>
+          </section>
+        </div>
       </section>
-
-      <section class="card">
-        <h2>常用问题</h2>
-        <p class="muted">这里是问答式编辑。保存时会同步到底部原始文本；未知字段会保留在原始文本里。</p>
-        <div class="qa" id="qa"></div>
-      </section>
-
-      <section class="card">
-        <h2>原始 .env 文本</h2>
-        <p class="muted">需要高级配置时直接改这里。保存前会和上面的问答字段合并。</p>
-        <textarea id="text" spellcheck="false">{escaped_content}</textarea>
-      </section>
-
-      <div class="actions">
-        <button id="save">保存配置</button>
-        <button id="sync" class="secondary">从原始文本重新读取</button>
-        <span id="status" class="status"></span>
-      </div>
-    </main>
-    <script>
+    """
+    script_html = """<script>
       const knownFields = [
-        {{ key: 'GODOTTER_DEFAULT_BRAIN', q: '默认使用哪个提供商？', hint: '例如 deepseek / moonshot / alibaba / siliconflow。' }},
-        {{ key: 'DEEPSEEK_API_KEY', q: 'DeepSeek API Key 是什么？', hint: '留空表示不配置 DeepSeek。', secret: true }},
-        {{ key: 'MOONSHOT_API_KEY', q: 'Moonshot API Key 是什么？', hint: '留空表示不配置 Moonshot。', secret: true }},
-        {{ key: 'ALIBABA_API_KEY', q: '阿里云百炼 API Key 是什么？', hint: '留空表示不配置 Alibaba。', secret: true }},
-        {{ key: 'SILICONFLOW_API_KEY', q: 'SiliconFlow API Key 是什么？', hint: '留空表示不配置 SiliconFlow。', secret: true }},
-        {{ key: 'GODOTTER_WEB_TOKEN', q: '网页访问 Token 是什么？', hint: '配置后接口需要 x-godotter-token；本机测试可留空。', secret: true }},
-        {{ key: 'GODOT_PATH', q: 'Godot 可执行文件路径是什么？', hint: '例如 D:/Godots/Engines/Godot_v4.6.1-stable_win64/...console.exe。' }},
+        { key: 'GODOTTER_DEFAULT_BRAIN', q: 'Default provider / brain?', hint: 'For example: deepseek / moonshot / alibaba / siliconflow.' },
+        { key: 'DEEPSEEK_API_KEY', q: 'DeepSeek API key?', hint: 'Leave empty if you do not use DeepSeek.', secret: true },
+        { key: 'MOONSHOT_API_KEY', q: 'Moonshot API key?', hint: 'Leave empty if you do not use Moonshot.', secret: true },
+        { key: 'ALIBABA_API_KEY', q: 'Alibaba API key?', hint: 'Leave empty if you do not use Alibaba.', secret: true },
+        { key: 'SILICONFLOW_API_KEY', q: 'SiliconFlow API key?', hint: 'Leave empty if you do not use SiliconFlow.', secret: true },
+        { key: 'GODOTTER_WEB_TOKEN', q: 'Web access token?', hint: 'When configured, API requests require x-godotter-token.', secret: true },
+        { key: 'GODOT_PATH', q: 'Godot executable path?', hint: 'Example: D:/Godots/Engines/Godot_v4.6.1-stable_win64/...console.exe.' },
       ];
 
       const btn = document.getElementById('save');
@@ -2203,88 +3152,96 @@ def env_editor(request: Request) -> str:
       const qa = document.getElementById('qa');
       const sync = document.getElementById('sync');
 
-      function parseEnv(raw) {{
-        const result = {{}};
-        for (const line of raw.split(/\\r?\\n/)) {{
+      function parseEnv(raw) {
+        const result = {};
+        for (const line of raw.split(/\r?\n/)) {
           const trimmed = line.trim();
           if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
           const idx = trimmed.indexOf('=');
           result[trimmed.slice(0, idx)] = trimmed.slice(idx + 1);
-        }}
+        }
         return result;
-      }}
+      }
 
-      function mergeEnv(raw, values) {{
+      function mergeEnv(raw, values) {
         const seen = new Set();
-        const lines = raw.split(/\\r?\\n/).map((line) => {{
+        const lines = raw.split(/\r?\n/).map((line) => {
           const trimmed = line.trim();
           if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) return line;
           const idx = trimmed.indexOf('=');
           const key = trimmed.slice(0, idx);
           if (!(key in values)) return line;
           seen.add(key);
-          return `${{key}}=${{values[key]}}`;
-        }});
-        for (const field of knownFields) {{
-          if (!seen.has(field.key) && values[field.key]) {{
-            lines.push(`${{field.key}}=${{values[field.key]}}`);
-          }}
-        }}
-        return lines.join('\\n').replace(/\\n*$/, '\\n');
-      }}
+          return `${key}=${values[key]}`;
+        });
+        for (const field of knownFields) {
+          if (!seen.has(field.key) && values[field.key]) {
+            lines.push(`${field.key}=${values[field.key]}`);
+          }
+        }
+        return lines.join('
+').replace(/
+*$/, '
+');
+      }
 
-      function renderQA() {{
+      function renderQA() {
         qa.innerHTML = '';
         const values = parseEnv(text.value);
-        for (const field of knownFields) {{
+        for (const field of knownFields) {
           const item = document.createElement('div');
           item.className = 'qa-item';
           const label = document.createElement('label');
-          label.setAttribute('for', `env-${{field.key}}`);
+          label.setAttribute('for', `env-${field.key}`);
           label.textContent = field.q;
           const hint = document.createElement('p');
           hint.className = 'muted';
-          hint.textContent = `${{field.key}} · ${{field.hint}}`;
+          hint.textContent = `${field.key} - ${field.hint}`;
           const input = document.createElement('input');
-          input.id = `env-${{field.key}}`;
+          input.id = `env-${field.key}`;
           input.dataset.key = field.key;
           input.type = field.secret ? 'password' : 'text';
           input.autocomplete = 'off';
           input.value = values[field.key] || '';
           item.append(label, hint, input);
           qa.appendChild(item);
-        }}
-      }}
+        }
+      }
 
-      function syncToText() {{
-        const values = {{}};
-        for (const input of qa.querySelectorAll('input[data-key]')) {{
+      function syncToText() {
+        const values = {};
+        for (const input of qa.querySelectorAll('input[data-key]')) {
           values[input.dataset.key] = input.value.trim();
-        }}
+        }
         text.value = mergeEnv(text.value, values);
-      }}
+      }
 
-      btn.addEventListener('click', async () => {{
+      btn.addEventListener('click', async () => {
         syncToText();
         status.textContent = 'Saving...';
-        const resp = await fetch('/api/env', {{
+        const resp = await fetch('/api/env', {
           method: 'PUT',
-          headers: {{ 'content-type': 'text/plain' }},
+          headers: { 'content-type': 'text/plain' },
           body: text.value
-        }});
-        if (resp.ok) {{
-          status.textContent = '已保存。';
-        }} else {{
+        });
+        if (resp.ok) {
+          status.textContent = 'Saved.';
+        } else {
           const t = await resp.text();
           status.textContent = 'Error: ' + t;
-        }}
-      }});
+        }
+      });
       sync.addEventListener('click', renderQA);
       renderQA();
-    </script>
-  </body>
-</html>
-"""
+    </script>"""
+    return _secondary_page(
+        title='Environment',
+        eyebrow='System',
+        summary='Edit provider keys, default brain selection, and other machine-local environment variables in one place.',
+        current='Env',
+        body_html=body_html,
+        script_html=script_html,
+    )
 
 
 @app.get('/api/env', response_class=PlainTextResponse)

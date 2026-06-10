@@ -32,31 +32,53 @@ function updateRunControls() {
   }
 }
 
-function showView(view) {
+function normalizeView(view) {
   if (view === "plan") {
-    view = "task";
+    return "task";
   } else if (view === "run") {
-    view = "log";
+    return "log";
   }
   const allowed = new Set(["chat", "task", "log", "build", "git", "files"]);
-  activeView = allowed.has(view) ? view : "chat";
-  for (const button of document.querySelectorAll("[data-view]")) {
+  return allowed.has(view) ? view : "chat";
+}
+
+function showView(view, options = {}) {
+  activeView = normalizeView(view);
+  for (const button of document.querySelectorAll(".gtab-view[data-view]")) {
     const isActive = button.dataset.view === activeView;
     button.classList.toggle("active", isActive);
-    button.setAttribute("aria-current", isActive ? "page" : "false");
   }
   for (const panel of document.querySelectorAll("[data-panel]")) {
     panel.classList.toggle("is-hidden", panel.dataset.panel !== activeView);
   }
-  const label = document.getElementById("current-view-label");
-  if (label) {
-    label.textContent = activeView[0].toUpperCase() + activeView.slice(1);
+  if (options.updateHash !== false && window.location.hash !== `#${activeView}`) {
+    history.pushState(null, "", `#${activeView}`);
   }
 }
 
 function setupViewTabs() {
-  window.addEventListener("hashchange", () => showView(window.location.hash.slice(1)));
-  showView(window.location.hash.slice(1) || activeView);
+  for (const button of document.querySelectorAll(".gtab-view[data-view]")) {
+    button.addEventListener("click", () => showView(button.dataset.view));
+  }
+  window.addEventListener("hashchange", () => showView(window.location.hash.slice(1), {updateHash: false}));
+  showView(window.location.hash.slice(1) || activeView, {updateHash: false});
+}
+
+function setupBurger() {
+  const overlay = document.getElementById("nav-overlay");
+  const burger = document.getElementById("burger-btn");
+  const closeBtn = document.getElementById("nav-close");
+  if (!overlay || !burger) return;
+
+  burger.addEventListener("click", () => { overlay.hidden = false; });
+  if (closeBtn) closeBtn.addEventListener("click", () => { overlay.hidden = true; });
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.hidden = true;
+  });
+  // Close sidebar when a nav link is clicked
+  for (const link of overlay.querySelectorAll("a, button")) {
+    link.addEventListener("click", () => { overlay.hidden = true; });
+  }
 }
 
 async function loadState() {
@@ -81,6 +103,7 @@ async function loadState() {
     workspace.textContent = `当前工作区：${selected.name}`;
     workspace.title = selected.workspace_root || "";
     await loadSavedSession();
+    await loadSessionList();
     await loadBuilds();
     await loadGitStatus();
     await loadProjectTree();
@@ -115,6 +138,7 @@ async function runBuildDoctor() {
   try {
     const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/builds/doctor`);
     const doctor = result.doctor || {};
+    const suggestions = result.suggestions || {};
     const presets = (doctor.presets || []).map((preset) => `${preset.name}(${preset.platform || "unknown"})`).join(", ");
     const warnings = (doctor.warnings || []).join("；");
     const errors = (doctor.errors || []).join("；");
@@ -125,12 +149,59 @@ async function runBuildDoctor() {
       warnings ? `warnings=${warnings}` : "",
       errors ? `errors=${errors}` : "",
     ].filter(Boolean).join(" · ");
-    if ((doctor.presets || []).length && !document.getElementById("build-preset").value.trim()) {
-      document.getElementById("build-preset").value = doctor.presets[0].name || "";
+    if ((doctor.presets || []).length) {
+      const select = document.getElementById("build-preset");
+      const currentValue = select.value;
+      select.innerHTML = '<option value="">选择 Preset...</option>';
+      for (const p of doctor.presets) {
+        const opt = document.createElement("option");
+        opt.value = p.name || "";
+        opt.textContent = `${p.name || "未命名"} (${p.platform || "unknown"})`;
+        if (p.name === currentValue) opt.selected = true;
+        select.appendChild(opt);
+      }
     }
   } catch (error) {
     message.textContent = `检查失败：${error.message}`;
   }
+}
+
+
+function showEnvSetDialog(key, suggest, currentValue) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "dialog-backdrop";
+  backdrop.innerHTML = `
+    <div class="dialog-card">
+      <strong>设置 ${key}</strong>
+      <p class="muted">当前值: ${escapeHtml(currentValue || "(未设置)")}</p>
+      ${suggest ? `<p class="muted">检测到: ${escapeHtml(suggest)}</p>` : ""}
+      <input type="text" id="env-set-input" placeholder="输入路径..." value="${escapeHtml(currentValue || suggest || "")}" />
+      <div class="dialog-actions">
+        <button type="button" id="env-set-cancel">取消</button>
+        <button type="button" id="env-set-save">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  backdrop.querySelector("#env-set-cancel").addEventListener("click", () => backdrop.remove());
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.remove(); });
+
+  backdrop.querySelector("#env-set-save").addEventListener("click", async () => {
+    const value = document.getElementById("env-set-input").value.trim();
+    if (!value) return;
+    try {
+      await fetchJson("/api/config", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({key, value}),
+      });
+      backdrop.remove();
+      runBuildDoctor();
+    } catch (error) {
+      alert(`保存失败: ${error.message}`);
+    }
+  });
 }
 
 async function submitBuild(event) {
@@ -176,6 +247,9 @@ function renderBuilds(builds) {
     return;
   }
   list.innerHTML = builds.map((build) => buildHtml(build)).join("");
+  for (const btn of list.querySelectorAll(".build-delete-btn")) {
+    btn.addEventListener("click", () => deleteBuild(btn.dataset.buildId));
+  }
 }
 
 function buildHtml(build) {
@@ -194,11 +268,25 @@ function buildHtml(build) {
       <div>
         <strong>${escapeHtml(build.preset || "unknown preset")}</strong>
         <span class="status-pill run-${escapeHtml(build.status || "unknown")}">${escapeHtml(build.status || "unknown")}</span>
+        <button type="button" class="build-delete-btn" data-build-id="${escapeHtml(build.build_id || "")}" title="删除此构建">&times;</button>
       </div>
       <p class="muted">${escapeHtml(build.build_id || "")} · ${escapeHtml(build.created_at || "")}</p>
       <div class="build-downloads">${links}</div>
     </article>
   `;
+}
+
+async function deleteBuild(buildId) {
+  if (!confirm(`确定删除构建 ${buildId}？`)) return;
+  try {
+    await fetchJson(
+      `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(buildId)}`,
+      { method: "DELETE" },
+    );
+    loadBuilds();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  }
 }
 
 function formatBytes(value) {
@@ -438,7 +526,7 @@ async function loadProjectTree(path = currentTreePath) {
   const status = document.getElementById("tree-status");
   const list = document.getElementById("tree-list");
   const pathLabel = document.getElementById("tree-path");
-  const depth = document.getElementById("tree-depth")?.value || "3";
+  const depth = 8;
   if (!status || !list || !pathLabel || !currentProject) {
     return;
   }
@@ -451,9 +539,8 @@ async function loadProjectTree(path = currentTreePath) {
     );
     status.textContent = result.truncated ? "Truncated" : "Loaded";
     list.innerHTML = treeNodeHtml(result.tree);
-    for (const button of list.querySelectorAll("[data-tree-path]")) {
-      button.addEventListener("click", () => loadProjectTree(button.dataset.treePath || ""));
-    }
+    collapseAllTreeChildren(list);
+    applySizeFilters();
   } catch (error) {
     status.textContent = "Failed";
     list.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
@@ -465,27 +552,67 @@ function treeNodeHtml(node) {
     return '<p class="muted">Empty tree.</p>';
   }
   const isDir = node.kind === "directory";
-  const icon = isDir ? "📁" : "📄";
-  const size = !isDir && node.size !== undefined ? ` <span class="muted">${formatBytes(node.size)}</span>` : "";
-  const openButton = isDir && node.path
-    ? `<button type="button" class="secondary" data-tree-path="${escapeHtml(node.path)}">Open</button>`
-    : "";
-  const children = (node.children || []).length
-    ? `<div class="tree-children">${node.children.map((child) => treeNodeHtml(child)).join("")}</div>`
-    : "";
-  const truncated = node.truncated ? ' <span class="muted">(truncated)</span>' : "";
-  return `
-    <div class="tree-node">
-      <div class="tree-row">
-        <span>${icon}</span>
-        <code title="${escapeHtml(node.path || "")}">${escapeHtml(node.name || "(root)")}</code>
-        ${size}
-        ${truncated}
-        ${openButton}
-      </div>
-      ${children}
-    </div>
-  `;
+  const gitStatus = node.git_status || "";
+  const gitClass = gitStatus ? ` git-${gitStatus}` : "";
+
+  if (isDir) {
+    const children = (node.children || []);
+    const childHtml = children.map((c) => treeNodeHtml(c)).join("");
+    const truncated = node.truncated ? ' <span class="muted truncated-tag"> (truncated)</span>' : "";
+    const treeId = `tree-${node.path.replace(/[^a-zA-Z0-9]/g, "_")}` || "tree-root";
+    const dirSize = node.size !== undefined
+      ? ` <span class="tree-size dir-size">${formatBytes(node.size)}</span>`
+      : "";
+    return `
+      <div class="tree-node">
+        <div class="tree-row tree-dir${gitClass}" data-tree-id="${treeId}" onclick="toggleTree('${treeId}', this)">
+          <span class="tree-toggle" id="${treeId}-toggle">▶</span>
+          <code>${escapeHtml(node.name || "(root)")}${dirSize}${truncated}</code>
+        </div>
+        <div class="tree-children" id="${treeId}-children">${childHtml}</div>
+      </div>`;
+  } else {
+    const size = node.size !== undefined
+      ? ` <span class="tree-size file-size">${formatBytes(node.size)}</span>`
+      : "";
+    return `
+      <div class="tree-node">
+        <div class="tree-row tree-file${gitClass}">
+          <span class="tree-toggle" style="visibility:hidden">▶</span>
+          <code>${escapeHtml(node.name)}${size}</code>
+        </div>
+      </div>`;
+  }
+}
+
+function toggleTree(treeId, rowEl) {
+  const children = document.getElementById(treeId + "-children");
+  const toggle = document.getElementById(treeId + "-toggle");
+  if (!children || !toggle) return;
+  if (children.style.display === "none") {
+    children.style.display = "block";
+    toggle.textContent = "▼";
+  } else {
+    children.style.display = "none";
+    toggle.textContent = "▶";
+  }
+}
+
+function collapseAllTreeChildren(container) {
+  for (const el of container.querySelectorAll(".tree-children")) {
+    el.style.display = "none";
+  }
+}
+
+function applySizeFilters() {
+  const showFiles = document.getElementById("show-file-size")?.checked ?? true;
+  const showDirs = document.getElementById("show-dir-size")?.checked ?? false;
+  for (const el of document.querySelectorAll(".file-size")) {
+    el.style.display = showFiles ? "" : "none";
+  }
+  for (const el of document.querySelectorAll(".dir-size")) {
+    el.style.display = showDirs ? "" : "none";
+  }
 }
 
 async function loadSavedSession() {
@@ -517,6 +644,48 @@ async function loadSavedSession() {
     status.textContent = "之前的对话不存在，发送消息时会创建新对话。";
   }
 }
+
+async function loadSessionList() {
+  const select = document.getElementById("session-select");
+  if (!select || !currentProject) return;
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/sessions`);
+    const sessions = result.sessions || [];
+    select.innerHTML = '<option value="">选择历史会话...</option>';
+    for (const s of sessions) {
+      const opt = document.createElement("option");
+      opt.value = s.session_id;
+      opt.textContent = s.title || s.session_id;
+      if (currentSession && s.session_id === currentSession.session_id) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    }
+  } catch (_) {
+    select.innerHTML = '<option value="">加载失败</option>';
+  }
+}
+
+document.getElementById("load-session-btn").addEventListener("click", async () => {
+  const select = document.getElementById("session-select");
+  const sessionId = select.value;
+  if (!sessionId) return;
+  try {
+    const detail = await fetchJson(
+      `/api/projects/${encodeURIComponent(currentProject)}/sessions/${encodeURIComponent(sessionId)}`,
+    );
+    currentSession = detail.session;
+    latestReview = detail.latest_review;
+    localStorage.setItem(selectedSessionKey(currentProject), sessionId);
+    renderMessages(detail.messages);
+    renderReview(latestReview);
+    document.getElementById("session-status").textContent = `当前对话：${currentSession.title}`;
+  } catch (error) {
+    alert(`加载会话失败：${error.message}`);
+  }
+});
+
+
 
 async function loadLatestRun() {
   if (!currentProject || !currentSession) {
@@ -569,6 +738,35 @@ function renderMessages(messages) {
   }
 }
 
+function renderTaskDetails(item) {
+  const scope = (item.scope || []).filter(Boolean);
+  const acceptance = (item.acceptance || []).filter(Boolean);
+  const verification = (item.verification || []).filter(Boolean);
+  const dependsOn = (item.depends_on || []).filter(Boolean);
+
+  if (!scope.length && !acceptance.length && !verification.length && !dependsOn.length) {
+    return "";
+  }
+
+  const detailId = `task-detail-${item.item_id}`;
+  const sections = [];
+  if (scope.length) sections.push(`<strong>Scope:</strong> ${scope.map((s) => `<code>${escapeHtml(s)}</code>`).join(", ")}`);
+  if (acceptance.length) sections.push(`<strong>验收:</strong> ${acceptance.map((s) => escapeHtml(s)).join("；")}`);
+  if (verification.length) sections.push(`<strong>验证:</strong> ${verification.map((s) => `<code>${escapeHtml(s)}</code>`).join("；")}`);
+  if (dependsOn.length) sections.push(`<strong>依赖:</strong> ${dependsOn.map((s) => escapeHtml(s)).join(", ")}`);
+
+  return `
+    <div class="task-detail-fold">
+      <div class="task-detail-head" onclick="document.getElementById('${detailId}').classList.toggle('is-hidden');this.querySelector('span').textContent = document.getElementById('${detailId}').classList.contains('is-hidden') ? '▶' : '▼'">
+        <span>▶</span> 详情 (Scope · 验收 · 验证)
+      </div>
+      <div class="task-detail-body is-hidden" id="${detailId}">
+        ${sections.map((s) => `<p class="muted" style="margin:4px 0;font-size:0.8rem">${s}</p>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderReview(review) {
   const status = document.getElementById("review-status");
   const list = document.getElementById("review-items");
@@ -583,6 +781,7 @@ function renderReview(review) {
   }
 
   status.textContent = review.status || "in_review";
+  applyPlanStateToRuntime(review);
   renderTaskSummary(review);
   for (const item of review.items || []) {
     const node = document.createElement("li");
@@ -598,6 +797,7 @@ function renderReview(review) {
         </div>
       </div>
       <p class="muted">${escapeHtml(item.goal || "")}</p>
+      ${renderTaskDetails(item)}
       ${runtimeDetails}
       <textarea id="${commentId}" placeholder="需要修改时填写评论；批准可留空。">${escapeHtml(item.comment || "")}</textarea>
       <div class="approval-bar">
@@ -634,6 +834,26 @@ function renderReview(review) {
     runButton.addEventListener("click", () => runApprovedReview(review.review_id));
     actions.appendChild(runButton);
   }
+}
+
+function applyPlanStateToRuntime(review) {
+  const taskStatus = review?.plan_state?.task_status || {};
+  for (const [taskId, status] of Object.entries(taskStatus)) {
+    const current = taskRuntimeStatus[taskId];
+    if (current && !["not_started", "queued"].includes(current.status)) {
+      continue;
+    }
+    taskRuntimeStatus[taskId] = planStateRuntimeStatus(status);
+  }
+}
+
+function planStateRuntimeStatus(status) {
+  return ({
+    pass: {status: "passed", label: "passed"},
+    fail: {status: "failed", label: "failed"},
+    running: {status: "running", label: "running"},
+    pending: {status: "not_started", label: "not started"},
+  })[status] || {status: "not_started", label: status || "not started"};
 }
 
 function renderTaskSummary(review) {
@@ -860,52 +1080,6 @@ function reviewStatusLabel(status) {
   })[status] || status || "待审批";
 }
 
-function refreshTaskRuntimeStatus() {
-  if (!currentRun) {
-    taskRuntimeRunId = null;
-    taskRuntimeStatus = {};
-    return;
-  }
-  if (taskRuntimeRunId !== currentRun.run_id) {
-    taskRuntimeRunId = currentRun.run_id;
-    taskRuntimeStatus = {};
-  }
-  for (const taskId of currentRun.task_ids || []) {
-    taskRuntimeStatus[taskId] = taskRuntimeStatus[taskId] || (isActiveRun(currentRun)
-      ? {status: "queued", label: "等待中"}
-      : {status: "not_started", label: "未执行"});
-  }
-  for (const command of currentRun.commands || []) {
-    const taskId = command.task_id;
-    if (!taskId) {
-      continue;
-    }
-    if (command.exit_code === 0) {
-      taskRuntimeStatus[taskId] = {status: "passed", label: "已通过"};
-    } else if (command.exit_code !== undefined && command.exit_code !== null) {
-      taskRuntimeStatus[taskId] = {status: "failed", label: "失败"};
-    }
-  }
-}
-
-function updateTaskRuntimeFromEvent(event) {
-  if (!event.task_id) {
-    return;
-  }
-  if (!taskRuntimeStatus[event.task_id]) {
-    taskRuntimeStatus[event.task_id] = {status: "queued", label: "等待中"};
-  }
-  if (event.type === "command" || event.type === "stdout") {
-    taskRuntimeStatus[event.task_id] = {status: "running", label: "执行中"};
-  }
-  if (event.type === "command_result" && event.payload) {
-    const exitCode = event.payload.exit_code;
-    taskRuntimeStatus[event.task_id] = exitCode === 0
-      ? {status: "passed", label: "已通过"}
-      : {status: "failed", label: "失败"};
-  }
-}
-
 function appendRunLine(line) {
   const log = document.getElementById("run-log");
   log.textContent += `${line}\n`;
@@ -951,11 +1125,108 @@ function appendBubble(role, text, scroll = true) {
   const timeline = document.getElementById("timeline");
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;
+  const head = document.createElement("div");
+  head.className = "bubble-head";
   const title = document.createElement("strong");
   title.textContent = role === "user" ? "You" : "Godotter";
-  const paragraph = document.createElement("p");
-  paragraph.textContent = text;
-  bubble.append(title, paragraph);
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "bubble-copy";
+  copyBtn.title = "复制到剪贴板";
+  copyBtn.textContent = "复制";
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(text).then(() => {
+      copyBtn.textContent = "已复制";
+      setTimeout(() => { copyBtn.textContent = "复制"; }, 1200);
+    }).catch(() => {
+      copyBtn.textContent = "失败";
+      setTimeout(() => { copyBtn.textContent = "复制"; }, 1200);
+    });
+  });
+  head.append(title, copyBtn);
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "bubble-content";
+
+  const paragraphs = text.split(/\n\n+/);
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const lineCount = (trimmed.match(/^ {0,2}\d+ \| /gm) || []).length;
+
+    const isSceneInspect = trimmed.includes("uid=uid://") && trimmed.includes("ext_resource");
+    const isProjectInfo = /^(name|main_scene|autoloads|script_count|scene_count)=/.test(trimmed);
+    const isFileList = /^[a-zA-Z]/.test(trimmed) && (trimmed.match(/^(game|tests|ui|\.godotter)\\?/gm) || []).length >= 3;
+
+    const toolFold = isSceneInspect ? "场景结构" : isProjectInfo ? "项目信息" : isFileList ? "文件列表" : null;
+
+    if (toolFold) {
+      const lines = trimmed.split("\n").length;
+      const wrapper = document.createElement("div");
+      wrapper.className = "code-fold";
+      const foldHead = document.createElement("div");
+      foldHead.className = "code-fold-head";
+      const label = document.createElement("span");
+      label.textContent = `${toolFold} · ${lines} 行`;
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "code-fold-toggle";
+      toggle.textContent = "展开";
+      foldHead.append(label, toggle);
+      const codeBody = document.createElement("div");
+      codeBody.className = "code-fold-body";
+      codeBody.style.display = "none";
+      const codeEl = document.createElement("code");
+      codeEl.textContent = trimmed;
+      codeBody.appendChild(codeEl);
+      toggle.addEventListener("click", () => {
+        const hidden = codeBody.style.display === "none";
+        codeBody.style.display = hidden ? "block" : "none";
+        toggle.textContent = hidden ? "收起" : "展开";
+      });
+      wrapper.append(foldHead, codeBody);
+      contentDiv.appendChild(wrapper);
+    } else if (lineCount >= 8) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "code-fold";
+
+      const foldHead = document.createElement("div");
+      foldHead.className = "code-fold-head";
+
+      const label = document.createElement("span");
+      const firstLine = trimmed.split("\n")[0].replace(/^ {0,2}\d+ \| /, "").trim().slice(0, 60);
+      label.textContent = `代码块 · ${lineCount} 行 · ${firstLine}...`;
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "code-fold-toggle";
+      toggle.textContent = "展开";
+      foldHead.append(label, toggle);
+
+      const codeBody = document.createElement("div");
+      codeBody.className = "code-fold-body";
+      codeBody.style.display = "none";
+      const codeEl = document.createElement("code");
+      codeEl.textContent = trimmed;
+      codeBody.appendChild(codeEl);
+
+      toggle.addEventListener("click", () => {
+        const hidden = codeBody.style.display === "none";
+        codeBody.style.display = hidden ? "block" : "none";
+        toggle.textContent = hidden ? "收起" : "展开";
+      });
+
+      wrapper.append(foldHead, codeBody);
+      contentDiv.appendChild(wrapper);
+    } else {
+      const p = document.createElement("p");
+      p.textContent = trimmed;
+      contentDiv.appendChild(p);
+    }
+  }
+  bubble.append(head, contentDiv);
   timeline.appendChild(bubble);
   if (scroll) {
     timeline.scrollTop = timeline.scrollHeight;
@@ -1067,48 +1338,57 @@ async function sendChatMessage() {
   }
 }
 
-async function generatePlanFromPrompt() {
-  const prompt = document.getElementById("prompt");
+async function generatePlanFromGoal() {
+  const goalInput = document.getElementById("plan-goal");
   const status = document.getElementById("session-status");
-  const text = prompt.value.trim();
+  const planStatus = document.getElementById("plan-status");
+  const submitBtn = document.getElementById("plan-submit");
+  const text = goalInput.value.trim();
   if (!currentProject) {
     status.textContent = "请先选择工作区。";
     return;
   }
-  let goal = text;
+  if (!text) {
+    if (planStatus) planStatus.textContent = "请先输入计划目标。";
+    return;
+  }
   try {
-    if (text) {
-      prompt.value = "";
-      await saveUserMessage(text);
-    } else if (!currentSession) {
-      status.textContent = "请先输入需求，或选择已有对话。";
-      return;
-    }
+    goalInput.value = "";
+    const session = await ensureSession(text);
+    currentSession = session;
+    if (planStatus) planStatus.textContent = "正在生成计划草案...";
+    if (submitBtn) submitBtn.disabled = true;
     status.textContent = "正在生成计划草案...";
     const plan = await fetchJson(
       `/api/projects/${encodeURIComponent(currentProject)}/sessions/${encodeURIComponent(currentSession.session_id)}/plan`,
       {
         method: "POST",
         headers: {"content-type": "application/json"},
-        body: JSON.stringify(goal ? {goal} : {}),
+        body: JSON.stringify({goal: text}),
       },
     );
     currentSession = plan.session;
     latestReview = plan.review;
     appendBubble("assistant", plan.message.content);
     renderReview(latestReview);
-    showView("task");
     status.textContent = `计划草案已生成：${plan.review.items.length} 个任务`;
+    if (planStatus) planStatus.textContent = `已生成 ${plan.review.items.length} 个任务`;
   } catch (error) {
     appendBubble("assistant warning", `计划生成失败：${error.message}`);
     status.textContent = "计划生成失败。";
+    if (planStatus) planStatus.textContent = "生成失败。";
     if (text) {
-      prompt.value = text;
+      goalInput.value = text;
     }
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
   }
 }
 
-document.getElementById("generate-plan").addEventListener("click", generatePlanFromPrompt);
+document.getElementById("plan-goal-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await generatePlanFromGoal();
+});
 
 document.getElementById("new-chat").addEventListener("click", async () => {
   if (!currentProject) {
@@ -1162,7 +1442,19 @@ document.getElementById("git-checkout").addEventListener("click", checkoutGitBra
 document.getElementById("git-commit-form").addEventListener("submit", submitGitCommit);
 document.getElementById("tree-refresh").addEventListener("click", () => loadProjectTree());
 document.getElementById("tree-root").addEventListener("click", () => loadProjectTree(""));
-document.getElementById("tree-depth").addEventListener("change", () => loadProjectTree());
+
+document.getElementById("show-file-size").addEventListener("change", (e) => {
+  for (const el of document.querySelectorAll(".file-size")) {
+    el.style.display = e.target.checked ? "" : "none";
+  }
+});
+
+document.getElementById("show-dir-size").addEventListener("change", (e) => {
+  for (const el of document.querySelectorAll(".dir-size")) {
+    el.style.display = e.target.checked ? "" : "none";
+  }
+});
 
 setupViewTabs();
+setupBurger();
 loadState();

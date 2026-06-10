@@ -4,39 +4,48 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Godotter Web Console</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=7" />
   </head>
   <body>
-    <main class="shell">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">Godotter</p>
-          <h1>云端开发工作台</h1>
-          <p class="subtle">先讨论计划，再审批执行。默认不直接改项目。</p>
+    <nav class="global-topbar">
+      <button class="burger" id="burger-btn" aria-label="菜单">☰</button>
+      <span class="brand">Godotter</span>
+      <div class="gtabs-desktop">
+        <a class="gtab" href="/projects">Projects</a>
+        <a class="gtab active" href="/">Workspace</a>
+        <a class="gtab" href="/settings">Settings</a>
+        <span class="gsep">·</span>
+        <button class="gtab gtab-view" data-view="chat">Chat</button>
+        <button class="gtab gtab-view" data-view="task">Task</button>
+        <button class="gtab gtab-view" data-view="log">Log</button>
+        <button class="gtab gtab-view" data-view="build">Build</button>
+        <button class="gtab gtab-view" data-view="git">Git</button>
+        <button class="gtab gtab-view" data-view="files">Files</button>
+      </div>
+      <span class="gstatus" id="workspace">...</span>
+    </nav>
+    <div class="nav-overlay" id="nav-overlay">
+      <div class="nav-sidebar">
+        <div class="nav-sidebar-head">
+          <span>Godotter</span>
+          <button class="nav-sidebar-close" id="nav-close">✕</button>
         </div>
-        <div class="status-card" aria-label="服务状态">
-          <span class="pulse"></span>
-          <div>
-            <strong>Backend Online</strong>
-            <small id="workspace">读取工作区中...</small>
-          </div>
-        </div>
-        <nav class="quick-nav" aria-label="常用入口">
-          <a href="/config">配置</a>
-          <a href="/projects">项目</a>
-          <a href="/env">.env</a>
-          <a href="/api/projects.toml">projects.toml</a>
+        <nav class="nav-sidebar-links">
+          <a href="/">Workspace</a>
+          <a href="/projects">Projects</a>
+          <a href="/settings">Settings</a>
+          <hr>
+          <button data-view="chat" class="nav-side-link gtab-view">Chat</button>
+          <button data-view="task" class="nav-side-link gtab-view">Task</button>
+          <button data-view="log" class="nav-side-link gtab-view">Log</button>
+          <button data-view="build" class="nav-side-link gtab-view">Build</button>
+          <button data-view="git" class="nav-side-link gtab-view">Git</button>
+          <button data-view="files" class="nav-side-link gtab-view">Files</button>
         </nav>
-        <nav class="view-tabs" aria-label="Workspace views">
-          <a class="view-tab" href="#chat" data-view="chat">Chat</a>
-          <a class="view-tab" href="#task" data-view="task">Task</a>
-          <a class="view-tab" href="#log" data-view="log">Log</a>
-          <a class="view-tab" href="#build" data-view="build">Build</a>
-          <a class="view-tab" href="#git" data-view="git">Git</a>
-          <a class="view-tab" href="#files" data-view="files">Files</a>
-        </nav>
-        <p class="view-current">当前界面：<strong id="current-view-label">Chat</strong></p>
-      </header>
+      </div>
+    </div>
+    <div class="shell">
+
 
       <section class="grid">
         <article class="panel chat-panel" data-panel="chat">
@@ -45,12 +54,18 @@
               <p class="eyebrow">Chat</p>
               <h2>对话入口</h2>
             </div>
-            <span class="badge">只生成计划</span>
+            <span class="new-chat-wrap"><button type="button" id="new-chat">新对话</button></span>
+          </div>
+          <div class="session-bar" id="session-bar">
+            <select id="session-select" aria-label="历史会话">
+              <option value="">选择历史会话...</option>
+            </select>
+            <button type="button" class="secondary" id="load-session-btn">加载</button>
           </div>
           <div class="timeline" id="timeline">
             <div class="bubble assistant">
               <strong>Planner</strong>
-              <p>你可以先给一句话需求。我会先生成计划，不直接执行。</p>
+              <p>你可以先给一句话需求，讨论清楚后再切换到 Task 面板生成计划。每个对话泡都有"复制"按钮，方便把结论带到计划里。</p>
             </div>
             <div class="bubble user">
               <strong>You</strong>
@@ -62,12 +77,9 @@
             </div>
           </div>
           <form class="composer" id="composer">
-            <textarea id="prompt" rows="3" placeholder="输入消息。发送=普通对话；生成计划=创建待审批任务。"></textarea>
-            <div class="composer-actions">
-              <button type="submit">发送</button>
-              <button type="button" class="secondary" id="generate-plan">生成计划草案</button>
-              <button type="button" class="secondary" id="new-chat">新对话</button>
-              <a class="button-link" href="/config">打开配置</a>
+            <div class="composer-row">
+              <textarea id="prompt" rows="3" placeholder="输入消息，讨论项目问题..."></textarea>
+              <button type="submit" class="send-btn" title="发送">➤</button>
             </div>
             <p class="subtle" id="session-status">未创建对话。</p>
           </form>
@@ -81,7 +93,14 @@
             </div>
             <span class="badge amber" id="review-status">暂无计划</span>
           </div>
-          <div class="task-summary" id="task-summary">暂无任务。生成计划后，这里会显示审批、执行、验证状态。</div>
+          <form class="plan-goal-form" id="plan-goal-form">
+            <textarea id="plan-goal" rows="4" placeholder="从对话中复制关键结论到这里，或直接输入目标..."></textarea>
+            <div class="plan-goal-bar">
+              <button type="submit" id="plan-submit">生成计划草案</button>
+              <span class="muted" id="plan-status"></span>
+            </div>
+          </form>
+          <div class="task-summary" id="task-summary">暂无任务。在对话中讨论问题后，将要点填入上方输入框，然后点击生成计划。</div>
           <ol class="task-list" id="review-items"></ol>
           <div class="approval-bar" id="review-actions"></div>
         </article>
@@ -114,7 +133,9 @@
           <form class="build-form" id="build-form">
             <label>
               <span>导出 Preset</span>
-              <input id="build-preset" name="preset" placeholder="例如 Web / Windows Desktop" required />
+              <select id="build-preset" name="preset" required>
+                <option value="">点击"检查导出配置"以加载...</option>
+              </select>
             </label>
             <label>
               <span>输出路径（可选）</span>
@@ -192,21 +213,20 @@
           <div class="button-row tree-actions">
             <button type="button" id="tree-refresh">刷新目录</button>
             <button type="button" class="secondary" id="tree-root">回到根目录</button>
-            <label>
-              <span>深度</span>
-              <select id="tree-depth">
-                <option value="2">2</option>
-                <option value="3" selected>3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-              </select>
+            <label class="checkbox-line">
+              <input id="show-file-size" type="checkbox" checked />
+              <span>文件大小</span>
+            </label>
+            <label class="checkbox-line">
+              <input id="show-dir-size" type="checkbox" />
+              <span>目录大小</span>
             </label>
           </div>
           <p class="muted" id="tree-path">res://</p>
           <div class="tree-list" id="tree-list">等待读取目录。</div>
         </article>
       </section>
-    </main>
-    <script src="/static/app.js"></script>
+    </div>
+    <script src="/static/app.js?v=6"></script>
   </body>
 </html>
