@@ -25,4 +25,5 @@ Thumbs.db
 *.code-workspace
 
 # Godotter
-.godotter/workpacks/
+.godotter/
+android/

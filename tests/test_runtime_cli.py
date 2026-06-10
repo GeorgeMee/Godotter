@@ -97,6 +97,16 @@ class FakeExportDoctorReport:
         self.godot_version = '4.6.1.stable.official'
         self.templates_root = '/tmp/Godot/export_templates/4.6.1.stable'
         self.templates_detected = True
+        self.android_sdk_path = None
+        self.android_sdk_valid = False
+        self.android_build_tools_version = None
+        self.android_adb_exists = False
+        self.java_home = None
+        self.java_valid = False
+        self.java_version = None
+        self.keystore_path = None
+        self.keystore_valid = False
+        self.android_template_installed = False
         self.ok = ok
         self.errors = [] if ok else ['export_presets.cfg is missing']
         self.warnings = []
@@ -268,6 +278,10 @@ def test_export_list_command_lists_build_reports(monkeypatch, tmp_path):
 def test_export_doctor_command_reports_presets_and_templates(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
+        'export_templates_path': None,
+        'android_sdk_path': None,
+        'java_home': None,
+        'android_keystore_path': None,
     })())
     monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(
@@ -287,6 +301,10 @@ def test_export_doctor_command_reports_presets_and_templates(monkeypatch, tmp_pa
 def test_export_doctor_command_fails_when_project_not_export_ready(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
+        'export_templates_path': None,
+        'android_sdk_path': None,
+        'java_home': None,
+        'android_keystore_path': None,
     })())
     monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(

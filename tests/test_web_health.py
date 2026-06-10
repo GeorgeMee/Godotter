@@ -1,3 +1,6 @@
+import json
+
+
 def test_web_health_importable():
     try:
         from godotter_web.app import (
@@ -10,7 +13,11 @@ def test_web_health_importable():
             _create_run_job,
             _create_session,
             _find_active_run_for_review,
+            _load_review,
             _run_process_key,
+            _ensure_gitignore_excludes_godotter,
+            _set_default_project,
+            _set_env_key,
             _safe_git_relpath,
             _project_tree,
             _list_runs,
@@ -35,6 +42,10 @@ def test_web_health_importable():
     assert state['workflow']['default_mode'] == 'plan-first'
     assert _safe_git_relpath('src/app.gd') == 'src/app.gd'
     assert callable(_project_tree)
+    assert callable(_ensure_gitignore_excludes_godotter)
+    assert callable(_set_env_key)
+    assert callable(_set_default_project)
+    assert callable(_load_review)
     assert isinstance(projects_get(_FakeRequest()), str)
     projects = projects_list(_FakeRequest())
     assert projects['ok'] is True
@@ -69,6 +80,33 @@ def test_web_routes():
     assert 'text/html' in response.headers.get('content-type', '')
 
 
+def test_secondary_pages_share_shell():
+    try:
+        from fastapi.testclient import TestClient
+        from godotter_web.app import app
+    except ModuleNotFoundError:
+        return
+    except RuntimeError as exc:
+        if 'testclient' in str(exc).lower() or 'httpx' in str(exc).lower():
+            return
+        raise
+
+    client = TestClient(app)
+    for route, marker in (
+        ('/projects', 'Current: Projects'),
+        ('/config', 'Current: Config'),
+        ('/env', 'Current: Env'),
+    ):
+        response = client.get(route)
+        assert response.status_code == 200
+        assert 'Workspace' in response.text
+        assert 'Tools' in response.text
+        assert marker in response.text
+        assert 'data-drawer-toggle' in response.text
+        assert 'drawer-backdrop' in response.text
+        assert "drawer-open" in response.text
+
+
 def test_task_status_frontend_preserves_runtime_state():
     from pathlib import Path
 
@@ -84,8 +122,20 @@ def test_task_page_mentions_runstate_and_verify_report():
 
     html = Path('src/godotter_web/static/index.html').read_text(encoding='utf-8')
     script = Path('src/godotter_web/static/app.js').read_text(encoding='utf-8')
+    styles = Path('src/godotter_web/static/styles.css').read_text(encoding='utf-8')
     assert 'id="task-summary"' in html
+    assert 'class="global-topbar"' in html
+    assert 'gtab-view' in html
+    assert '<button class="gtab gtab-view" data-view="task">Task</button>' in html
+    assert 'function normalizeView(view)' in script
+    assert '.global-topbar' in styles
+    assert 'history.pushState(null, "", `#${activeView}`)' in script
+    assert '.drawer-backdrop' in styles
+    assert '@media (max-width: 1279px), (pointer: coarse)' in styles
+    assert '@media (max-width: 560px)' in styles
     assert 'function renderTaskSummary(review)' in script
+    assert 'function applyPlanStateToRuntime(review)' in script
+    assert 'plan_state?.task_status' in script
     assert 'function summaryHint(review, run, verify)' in script
     assert 'function runtimeDetailsHtml(runtime)' in script
     assert 'runtime.runstate' in script
@@ -166,6 +216,92 @@ def test_git_status_summary_handles_non_repo(tmp_path):
     assert summary['commits'] == []
 
 
+def test_gitignore_helper_excludes_godotter(tmp_path):
+    try:
+        from godotter_web.app import _ensure_gitignore_excludes_godotter
+    except ModuleNotFoundError:
+        return
+
+    (tmp_path / '.gitignore').write_text('export/\n', encoding='utf-8')
+    _ensure_gitignore_excludes_godotter(tmp_path)
+    content = (tmp_path / '.gitignore').read_text(encoding='utf-8')
+    assert 'export/' in content
+    assert '.godotter/' in content
+
+
+def test_set_default_project_updates_registry_and_env(tmp_path, monkeypatch):
+    try:
+        from godotter_web import app as web_app
+        from godotter_web.app import _set_default_project
+    except ModuleNotFoundError:
+        return
+
+    env_path = tmp_path / '.env'
+    projects_path = tmp_path / 'config' / 'projects.toml'
+    snake_root = tmp_path / 'Snake'
+    tetris_root = tmp_path / 'tetris'
+    snake_root.mkdir()
+    tetris_root.mkdir()
+    projects_path.parent.mkdir()
+    projects_path.write_text(
+        '\n'.join(
+            [
+                'default_project = "tetris"',
+                '',
+                '[projects.Snake]',
+                f'workspace_root = "{snake_root.as_posix()}"',
+                '',
+                '[projects.tetris]',
+                f'workspace_root = "{tetris_root.as_posix()}"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+        newline='\n',
+    )
+    env_path.write_text('GODOTTER_DEFAULT_PROJECT=tetris\nOTHER_KEY=keep\n', encoding='utf-8')
+    monkeypatch.setattr(web_app, '_env_path', lambda: env_path)
+    monkeypatch.setattr(web_app, '_projects_path', lambda: projects_path)
+
+    result = _set_default_project('Snake')
+
+    assert result['default_project'] == 'Snake'
+    assert 'default_project = "Snake"' in projects_path.read_text(encoding='utf-8')
+    env_text = env_path.read_text(encoding='utf-8')
+    assert 'GODOTTER_DEFAULT_PROJECT=Snake\n' in env_text
+    assert 'OTHER_KEY=keep\n' in env_text
+
+
+def test_load_review_includes_plan_state(tmp_path):
+    try:
+        from godotter_web.app import _load_review
+    except ModuleNotFoundError:
+        return
+
+    plan_path = tmp_path / '.godotter' / 'plans' / 'plan_demo.json'
+    state_path = tmp_path / '.godotter' / 'plans' / 'plan_demo.state.json'
+    review_path = tmp_path / '.godotter' / 'sessions' / 'cs_demo' / 'reviews' / 'pr_demo.json'
+    plan_path.parent.mkdir(parents=True)
+    review_path.parent.mkdir(parents=True)
+    plan_path.write_text('{"plan_id":"pp_demo","tasks":[]}', encoding='utf-8')
+    state_path.write_text('{"plan_id":"pp_demo","updated_at":"now","task_status":{"t1":"pass"}}', encoding='utf-8')
+    review_path.write_text(
+        json.dumps(
+            {
+                'review_id': 'pr_demo',
+                'session_id': 'cs_demo',
+                'planpack_path': plan_path.as_posix(),
+                'items': [{'item_id': 't1', 'status': 'approved'}],
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    review = _load_review(tmp_path, 'cs_demo', 'pr_demo')
+
+    assert review['plan_state']['task_status']['t1'] == 'pass'
+
+
 def test_git_status_summary_includes_branches_and_commits(tmp_path):
     import subprocess
 
@@ -219,7 +355,6 @@ def test_project_tree_frontend_controls_are_present():
     assert 'data-view="files"' in html
     assert 'id="tree-list"' in html
     assert 'id="tree-refresh"' in html
-    assert 'id="tree-depth"' in html
     assert 'async function loadProjectTree' in script
     assert 'function treeNodeHtml(node)' in script
     assert '/tree?path=' in script
@@ -288,10 +423,10 @@ def test_chat_and_plan_are_separate_frontend_actions():
 
     html = Path('src/godotter_web/static/index.html').read_text(encoding='utf-8')
     script = Path('src/godotter_web/static/app.js').read_text(encoding='utf-8')
-    assert 'id="generate-plan"' in html
-    assert '<button type="submit">发送</button>' in html
+    assert 'id="plan-goal-form"' in html
+    assert 'class="send-btn"' in html
     assert 'async function sendChatMessage()' in script
-    assert 'async function generatePlanFromPrompt()' in script
+    assert 'async function generatePlanFromGoal()' in script
     assert '/reply' in script
     assert '/plan' in script
 

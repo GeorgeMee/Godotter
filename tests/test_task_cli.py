@@ -17,7 +17,13 @@ def test_rewrite_runtime_verify_drops_invalid_kind_and_name_flags(tmp_path):
         'uv run godotter runtime verify --kind feature --name snake_movement_basic',
     )
 
-    assert command == 'uv run godotter runtime verify'
+    assert command == 'uv run godotter runtime verify --project .'
+
+
+def test_rewrite_runtime_verify_binds_to_current_project(tmp_path):
+    command = _rewrite_verification_command(tmp_path, 'uv run godotter runtime verify')
+
+    assert command == 'uv run godotter runtime verify --project .'
 
 
 def test_record_failure_verify_report_does_not_return_stale_latest(monkeypatch, tmp_path):
@@ -61,6 +67,9 @@ def test_task_prepare_writes_workpack_and_list_show(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
             },
         )(),
     )
@@ -102,6 +111,9 @@ def test_task_run_uses_workpack_workspace_root(monkeypatch, tmp_path):
                 'workspace_root': default_root,
                 'resolved_memory_path': default_root / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -109,6 +121,9 @@ def test_task_run_uses_workpack_workspace_root(monkeypatch, tmp_path):
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -119,7 +134,7 @@ def test_task_run_uses_workpack_workspace_root(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -158,6 +173,9 @@ def test_task_show_prints_assumptions_and_relevant_files(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
             },
         )(),
     )
@@ -188,6 +206,9 @@ def test_task_run_maps_deprecated_code_mode_to_act(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -195,6 +216,9 @@ def test_task_run_maps_deprecated_code_mode_to_act(monkeypatch, tmp_path):
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -204,7 +228,7 @@ def test_task_run_maps_deprecated_code_mode_to_act(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -242,6 +266,9 @@ def test_task_run_act_fails_without_workspace_changes(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -249,6 +276,9 @@ def test_task_run_act_fails_without_workspace_changes(monkeypatch, tmp_path):
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -258,7 +288,7 @@ def test_task_run_act_fails_without_workspace_changes(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -294,6 +324,9 @@ def test_task_run_act_requires_tests_and_level_updates(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -301,6 +334,9 @@ def test_task_run_act_requires_tests_and_level_updates(monkeypatch, tmp_path):
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -310,7 +346,7 @@ def test_task_run_act_requires_tests_and_level_updates(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -350,6 +386,9 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -357,6 +396,9 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -366,7 +408,7 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -419,6 +461,9 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -426,6 +471,9 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -435,7 +483,7 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -482,6 +530,9 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                 'model_copy': lambda self, update: type(
                     'S',
                     (),
@@ -489,6 +540,9 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
                         'workspace_root': Path(update['workspace_root']),
                         'resolved_memory_path': Path(update['workspace_root']) / '.godotter' / 'memory.md',
                         'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
                     },
                 )(),
             },
@@ -498,7 +552,7 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
     monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
     monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
     monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain: object())
+    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):

@@ -32,6 +32,9 @@ def test_task_scout_finds_relevant_files(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
             },
         )(),
     )
@@ -71,6 +74,9 @@ def test_task_scout_prioritizes_git_changed_files(monkeypatch, tmp_path):
                 'workspace_root': tmp_path,
                 'resolved_memory_path': tmp_path / '.godotter' / 'memory.md',
                 'default_brain': 'stub',
+                'resolved_chat_brain': 'stub',
+                'resolved_plan_brain': 'stub',
+                'resolved_act_brain': 'stub',
             },
         )(),
     )
