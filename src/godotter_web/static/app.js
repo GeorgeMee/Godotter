@@ -60,6 +60,12 @@ function setupViewTabs() {
   for (const button of document.querySelectorAll(".gtab-view[data-view]")) {
     button.addEventListener("click", () => showView(button.dataset.view));
   }
+  for (const a of document.querySelectorAll(".gtabs-desktop a[href='/']")) {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      history.pushState(null, "", "/");
+    });
+  }
   window.addEventListener("hashchange", () => showView(window.location.hash.slice(1), {updateHash: false}));
   showView(window.location.hash.slice(1) || activeView, {updateHash: false});
 }
@@ -75,9 +81,14 @@ function setupBurger() {
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) overlay.hidden = true;
   });
-  // Close sidebar when a nav link is clicked
   for (const link of overlay.querySelectorAll("a, button")) {
-    link.addEventListener("click", () => { overlay.hidden = true; });
+    link.addEventListener("click", (e) => {
+      overlay.hidden = true;
+      if (link.tagName === "A" && link.getAttribute("href") === "/") {
+        e.preventDefault();
+        history.pushState(null, "", "/");
+      }
+    });
   }
 }
 

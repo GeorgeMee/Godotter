@@ -1431,7 +1431,7 @@ def _secondary_page(
       .page {{
         width: min(1380px, 100%);
         margin: 0 auto;
-        padding: 54px 16px 16px;
+        padding: 60px 16px 16px;
       }}
        .hero, .panel {{
          border: 1px solid var(--line);
@@ -1548,7 +1548,7 @@ def _secondary_page(
       }}
       .card-grid {{
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr;
         gap: 14px;
       }}
       .card {{
@@ -1626,14 +1626,9 @@ def _secondary_page(
       .mono {{
         font-family: Consolas, "SFMono-Regular", monospace;
       }}
-      @media (max-width: 800px) {{
-        .card-grid {{
-          grid-template-columns: 1fr;
-        }}
-      }}
       @media (max-width: 640px) {{
         .page {{
-          padding: 10px;
+          padding: 60px 10px 10px;
         }}
         .hero, .panel {{
           border-radius: 18px;
@@ -1655,6 +1650,8 @@ def _secondary_page(
         gap: 10px;
         min-height: 36px;
         padding: 4px 0;
+        min-width: 0;
+        flex-wrap: wrap;
       }}
       .settings-row .settings-label {{
         width: 90px;
@@ -1664,6 +1661,7 @@ def _secondary_page(
       }}
       .settings-row code {{
         flex: 1;
+        min-width: 0;
         font-size: 0.8rem;
         color: var(--muted);
         overflow: hidden;
@@ -1689,6 +1687,8 @@ def _secondary_page(
         align-items: center;
         gap: 10px;
         min-height: 36px;
+        min-width: 0;
+        flex-wrap: wrap;
       }}
       .settings-inline select {{
         flex: 1;
@@ -1717,6 +1717,40 @@ def _secondary_page(
       .settings-inline .env-set-btn:hover {{
         color: var(--text);
         border-color: var(--line-strong);
+      }}
+
+      .agent-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 0;
+        min-width: 0;
+      }}
+      .agent-task-label {{
+        width: 42px;
+        flex-shrink: 0;
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text);
+      }}
+      .agent-selects {{
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+        min-width: 0;
+      }}
+      .agent-inline-label {{
+        font-size: 0.72rem;
+        color: var(--muted);
+        white-space: nowrap;
+      }}
+      .agent-selects select {{
+        min-width: 0;
+      }}
+      .agent-table {{
+        min-width: 0;
       }}
 
       .burger {{
@@ -1869,8 +1903,12 @@ def _secondary_page(
         }}
       }});
       for (const link of document.querySelectorAll(".nav-sidebar-links a")) {{
-        link.addEventListener("click", () => {{
+        link.addEventListener("click", (e) => {{
           document.getElementById("nav-overlay").hidden = true;
+          if (link.getAttribute("href") === "/") {{
+            e.preventDefault();
+            window.location.href = "/";
+          }}
         }});
       }}
     </script>
@@ -2707,7 +2745,7 @@ def projects_page(request: Request) -> str:
           <p class="eyebrow">Registry</p>
           <h2>Projects</h2>
         </div>
-        <div class="card-grid" style="grid-template-columns:1fr 1fr;gap:14px">
+        <div class="card-grid">
           <section class="card">
             <div class="panel-stack">
               <h3>Registered</h3>
@@ -2718,7 +2756,6 @@ def projects_page(request: Request) -> str:
                 <p id="create-status" class="muted"></p>
               </form>
               <div id="project-list" class="project-list"></div>
-            </div>
             </div>
           </section>
           <section class="card">
@@ -2875,7 +2912,7 @@ def settings_page(request: Request) -> str:
             <p class="muted" style="margin-bottom:10px">为 Chat、Plan、Run 分别选择提供商和模型。</p>
             <div class="agent-table" id="settings-agent-table"></div>
           </section>
-          <section class="card">
+          <section class="card" style="overflow:hidden">
             <h3 style="margin-bottom:10px">导出环境</h3>
             <p class="muted" style="margin-bottom:8px">选择一个项目以诊断导出配置。</p>
             <div class="settings-inline">
@@ -2883,7 +2920,7 @@ def settings_page(request: Request) -> str:
               <button type="button" id="settings-doctor-run">诊断</button>
               <span class="muted" id="settings-doctor-status"></span>
             </div>
-            <div id="settings-env-body" style="margin-top:8px"></div>
+            <div id="settings-env-body" style="margin-top:8px;overflow:hidden"></div>
           </section>
           <section class="card">
             <h3 style="margin-bottom:10px">项目</h3>

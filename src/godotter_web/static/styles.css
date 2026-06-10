@@ -6,8 +6,10 @@
   --text: #f1f5f9;
   --muted: #9aa3af;
   --line: #303640;
+  --line-strong: #4b5563;
   --primary: #3b82f6;
   --primary-2: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.08);
   --amber: #f59e0b;
   --green: #16a34a;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -80,7 +82,7 @@ textarea {
   z-index: 100;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 8px 16px;
   background: rgba(17, 19, 24, 0.95);
   backdrop-filter: blur(10px);
@@ -89,19 +91,19 @@ textarea {
 }
 .global-topbar .brand {
   font-weight: 800;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text);
-  margin-right: 8px;
+  margin-right: 12px;
 }
 .gtab {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 36px;
   align-items: center;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 600;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
@@ -109,13 +111,13 @@ textarea {
   transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 .gtab:hover {
-  border-color: var(--line);
+  border-color: var(--line-strong);
   color: var(--text);
 }
 .gtab.active {
-  border-color: var(--primary);
-  color: #93c5fd;
-  background: rgba(59, 130, 246, 0.12);
+  border-color: var(--line-strong);
+  color: #d8e6ff;
+  background: var(--accent-soft);
 }
 .gsep {
   color: var(--line);
@@ -131,16 +133,21 @@ textarea {
 
 .burger {
   display: none;
-  min-height: 32px;
-  min-width: 32px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
   font-size: 16px;
+  font-weight: 400;
   cursor: pointer;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 .burger:hover {
   border-color: var(--primary);
@@ -218,9 +225,6 @@ textarea {
 }
 
 @media (max-width: 768px) {
-  .global-topbar {
-    justify-content: space-between;
-  }
   .burger {
     display: inline-flex;
   }
@@ -229,6 +233,9 @@ textarea {
   }
   .gstatus {
     display: none;
+  }
+  .global-topbar .brand {
+    margin-right: auto;
   }
 }
 
@@ -241,7 +248,7 @@ textarea {
 .shell {
   width: min(1380px, 100%);
   margin: 0 auto;
-  padding: 54px 16px 16px;
+  padding: 60px 16px 16px;
 }
 
 .hero {
@@ -406,6 +413,7 @@ small {
 
 .grid {
   display: block;
+  min-width: 0;
 }
 
 .panel.is-hidden {
@@ -415,6 +423,7 @@ small {
 .panel {
   border-radius: 16px;
   padding: 14px;
+  min-width: 0;
 }
 
 .panel-head,
@@ -478,10 +487,13 @@ small {
   overflow: auto;
   margin: 14px 0;
   padding-right: 2px;
+  min-width: 0;
 }
 
 .bubble {
   width: min(92%, 560px);
+  max-width: min(92%, 560px);
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 12px 14px;
@@ -500,14 +512,19 @@ small {
 
 .bubble-copy {
   font-size: 0.72rem;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
   transition: color 0.15s, border-color 0.15s;
+  min-height: unset;
+  min-width: unset;
+  width: auto !important;
+  font-weight: 400;
+  line-height: 1.2;
 }
 
 .bubble-copy:hover {
@@ -518,6 +535,8 @@ small {
 .bubble-content p {
   margin: 8px 0 0;
   color: #cbd5e1;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .code-fold {
@@ -547,13 +566,18 @@ small {
 
 .code-fold-toggle {
   font-size: 0.72rem;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
+  min-height: unset;
+  min-width: unset;
+  width: auto !important;
+  font-weight: 400;
+  line-height: 1.2;
 }
 
 .code-fold-toggle:hover {
@@ -590,7 +614,8 @@ small {
 }
 
 .session-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: center;
   padding: 6px 0;
@@ -598,7 +623,7 @@ small {
   border-bottom: 1px solid var(--line);
 }
 .session-bar select {
-  flex: 1;
+  min-width: 0;
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -610,7 +635,7 @@ small {
 }
 .session-bar button {
   min-height: 36px;
-  padding: 0 14px;
+  padding: 0 10px;
   white-space: nowrap;
 }
 
@@ -690,8 +715,12 @@ small {
 }
 
 .send-btn {
-  min-height: 44px;
+  width: 44px;
+  height: 44px;
   min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  flex-shrink: 0;
   border: 1px solid var(--primary);
   border-radius: 12px;
   background: var(--primary);
@@ -708,13 +737,13 @@ small {
 }
 
 .new-chat-wrap button {
-  min-height: 26px;
+  min-height: 36px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 .new-chat-wrap button:hover {
@@ -1106,6 +1135,7 @@ small {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .build-card {
@@ -1158,6 +1188,7 @@ small {
 .git-layout {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .git-branch-panel {
@@ -1167,11 +1198,13 @@ small {
   border-radius: 12px;
   padding: 12px;
   background: #11141a;
+  min-width: 0;
 }
 
 .git-branch-controls {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .git-branch-controls select {
@@ -1191,11 +1224,13 @@ small {
   border-radius: 10px;
   padding: 10px;
   background: #14171d;
+  min-width: 0;
 }
 
 .git-branch-card {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  overflow: hidden;
 }
 
 .git-branch-card.active {
@@ -1215,6 +1250,7 @@ small {
   display: grid;
   gap: 8px;
   margin-bottom: 12px;
+  min-width: 0;
 }
 
 .git-file-row {
@@ -1226,6 +1262,8 @@ small {
   border-radius: 10px;
   padding: 8px;
   background: #11141a;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .git-file-row code {
@@ -1534,7 +1572,7 @@ button:hover,
 
 @media (min-width: 1280px) and (pointer: fine) {
   .shell {
-    padding: 54px 18px 18px;
+    padding: 60px 18px 18px;
   }
 
   .hero {
@@ -1640,7 +1678,7 @@ button:hover,
   }
 
   .shell {
-    padding: 54px 10px 10px;
+    padding: 60px 10px 10px;
     padding-bottom: calc(18px + env(safe-area-inset-bottom, 0));
   }
 
