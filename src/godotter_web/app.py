@@ -463,7 +463,7 @@ def _json_file_summary(path: Path) -> dict[str, object]:
         summary['error'] = f'{type(exc).__name__}: {exc}'
         return summary
     if isinstance(data, dict):
-        for key in ('plan_id', 'task_id', 'created_at', 'goal', 'workspace_root'):
+        for key in ('plan_id', 'task_id', 'created_at', 'goal', 'name', 'workspace_root'):
             if key in data:
                 summary[key] = data[key]
         if isinstance(data.get('tasks'), list):
@@ -1271,6 +1271,7 @@ def _generate_planpack(
         created_at=_now_iso(),
         workspace_root=workspace_root.as_posix(),
         goal=goal,
+        name=str(parsed.get('name', '')).strip() or goal[:80],
         global_constraints=constraints,
         tasks=tasks,
     )

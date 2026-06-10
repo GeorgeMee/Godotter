@@ -737,9 +737,10 @@ def plan_prepare_command(
 
     pack = PlanPack(
         plan_id=new_plan_id(),
-        created_at=datetime.now().isoformat(timespec='seconds'),
+        created_at=_now_iso(),
         workspace_root=root.as_posix(),
         goal=goal,
+        name=str(parsed.get('name', '')).strip() or goal[:80],
         global_constraints=constraints,
         tasks=tasks,
     )

@@ -77,7 +77,7 @@ def build_plan_prompt(goal: str, scout_refs: list[ScoutPromptRef]) -> tuple[str,
     prompt = '\n'.join(
         [
             'Create an executable implementation plan as JSON ONLY (no markdown, no backticks, no commentary).',
-            'Output must be a single JSON object with keys: tasks (array).',
+            'Output must be a single JSON object with keys: name (string, short concise summary), tasks (array).',
             'Each task must have: title, goal, scope (array of path prefixes), acceptance (array), verification (array), depends_on (array).',
             'Only output tasks that an executor should run. Do not output scout/analysis/decision/manual-smoke tasks.',
             'Every task must include code/content changes and automated verification in the same task.',

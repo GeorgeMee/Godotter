@@ -24,6 +24,7 @@ class PlanPack:
     created_at: str
     workspace_root: str
     goal: str
+    name: str = ""
     global_constraints: list[str] = field(default_factory=list)
     tasks: list[PlanTask] = field(default_factory=list)
 
@@ -78,6 +79,7 @@ def load_planpack(path: Path) -> PlanPack:
         plan_id=str(data.get("plan_id", "")),
         created_at=str(data.get("created_at", "")),
         workspace_root=str(data.get("workspace_root", "")),
+        name=str(data.get("name", "")),
         goal=str(data.get("goal", "")),
         global_constraints=list(data.get("global_constraints", [])),
         tasks=tasks,
