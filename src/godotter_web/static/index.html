@@ -20,6 +20,7 @@
         <button class="gtab gtab-view" data-view="task">Task</button>
         <button class="gtab gtab-view" data-view="log">Log</button>
         <button class="gtab gtab-view" data-view="build">Build</button>
+        <button class="gtab gtab-view" data-view="play">Play</button>
         <button class="gtab gtab-view" data-view="git">Git</button>
         <button class="gtab gtab-view" data-view="files">Files</button>
       </div>
@@ -40,6 +41,7 @@
           <button data-view="task" class="nav-side-link gtab-view">Task</button>
           <button data-view="log" class="nav-side-link gtab-view">Log</button>
           <button data-view="build" class="nav-side-link gtab-view">Build</button>
+          <button data-view="play" class="nav-side-link gtab-view">Play</button>
           <button data-view="git" class="nav-side-link gtab-view">Git</button>
           <button data-view="files" class="nav-side-link gtab-view">Files</button>
         </nav>
@@ -154,6 +156,26 @@
             <p class="muted" id="build-message">需要项目存在 `export_presets.cfg`，且 Godot 已安装对应导出模板。</p>
           </form>
           <div class="build-list" id="build-list"></div>
+        </article>
+
+        <article class="panel play-panel is-hidden" data-panel="play">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Play</p>
+              <h2>游戏预览</h2>
+              <p class="subtle">一键 Web 导出并在浏览器中直接运行游戏。</p>
+            </div>
+            <span class="badge" id="play-status">停止</span>
+          </div>
+          <div class="play-toolbar">
+            <button type="button" id="play-build-and-run">构建并运行</button>
+            <button type="button" class="secondary" id="play-stop">停止</button>
+            <button type="button" class="secondary" id="play-refresh">刷新</button>
+          </div>
+          <div class="play-frame-wrap" id="play-frame-wrap">
+            <iframe id="play-frame" sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-popups"></iframe>
+            <p class="play-message muted" id="play-message">点击"构建并运行"来导出 Web 版本并在浏览器中预览。</p>
+          </div>
         </article>
 
         <article class="panel git-panel is-hidden" data-panel="git">

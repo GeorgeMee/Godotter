@@ -1887,3 +1887,30 @@ button:hover,
   color: var(--primary);
   text-decoration: underline;
 }
+
+.play-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px;
+}
+
+.play-frame-wrap {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 70vh;
+  overflow: hidden;
+  position: relative;
+}
+
+.play-frame-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+.play-message {
+  padding: 24px;
+  text-align: center;
+}

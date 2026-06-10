@@ -2269,6 +2269,16 @@ def project_build_download(name: str, build_id: str, artifact_path: str, request
     return FileResponse(path, filename=path.name)
 
 
+@app.get('/api/projects/{name}/builds/{build_id}/preview/{file_path:path}')
+def project_build_preview(name: str, build_id: str, file_path: str, request: Request) -> FileResponse:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    build_id = _validate_id(build_id, prefix='build')
+    rel_path = f'.godotter/builds/{build_id}/{file_path}'
+    path = _safe_project_file(root, rel_path)
+    return FileResponse(path)
+
+
 @app.post('/api/projects/{name}/builds/install-template')
 async def project_builds_install_template(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)

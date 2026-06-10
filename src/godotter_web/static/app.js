@@ -38,7 +38,7 @@ function normalizeView(view) {
   } else if (view === "run") {
     return "log";
   }
-  const allowed = new Set(["chat", "task", "log", "build", "git", "files"]);
+  const allowed = new Set(["chat", "task", "log", "build", "play", "git", "files"]);
   return allowed.has(view) ? view : "chat";
 }
 
@@ -1419,6 +1419,60 @@ document.getElementById("cancel-run").addEventListener("click", async () => {
 document.getElementById("build-form").addEventListener("submit", submitBuild);
 document.getElementById("build-doctor").addEventListener("click", runBuildDoctor);
 document.getElementById("build-refresh").addEventListener("click", loadBuilds);
+
+let _playBuildId = null;
+
+async function buildAndRunWeb() {
+  const msg = document.getElementById("play-message");
+  const status = document.getElementById("play-status");
+  const frame = document.getElementById("play-frame");
+  msg.textContent = "正在构建 Web 导出...";
+  status.textContent = "构建中";
+  status.className = "badge amber";
+  frame.src = "";
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/builds`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({preset: "Web"}),
+    });
+    if (!result.ok) {
+      msg.textContent = `构建失败：${result.build?.status || "unknown"}`;
+      status.textContent = "失败";
+      status.className = "badge";
+      return;
+    }
+    _playBuildId = result.build.build_id;
+    const previewUrl = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(_playBuildId)}/preview/index.html`;
+    frame.src = previewUrl;
+    msg.textContent = "";
+    status.textContent = "运行中";
+    status.className = "badge green";
+  } catch (error) {
+    msg.textContent = `构建失败：${error.message}`;
+    status.textContent = "失败";
+    status.className = "badge";
+  }
+}
+
+function stopPlay() {
+  const frame = document.getElementById("play-frame");
+  const msg = document.getElementById("play-message");
+  const status = document.getElementById("play-status");
+  frame.src = "";
+  _playBuildId = null;
+  msg.textContent = "已停止。点击"构建并运行"重新预览。";
+  status.textContent = "停止";
+  status.className = "badge";
+}
+
+function loadPlayStatus() {
+  if (_playBuildId) {
+    const frame = document.getElementById("play-frame");
+    frame.src = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(_playBuildId)}/preview/index.html`;
+  }
+}
+
 document.getElementById("git-refresh").addEventListener("click", loadGitStatus);
 document.getElementById("git-init").addEventListener("click", initGitRepo);
 document.getElementById("git-fetch").addEventListener("click", () => runGitAction("fetch"));
@@ -1428,6 +1482,10 @@ document.getElementById("git-checkout").addEventListener("click", checkoutGitBra
 document.getElementById("git-commit-form").addEventListener("submit", submitGitCommit);
 document.getElementById("tree-refresh").addEventListener("click", () => loadProjectTree());
 document.getElementById("tree-root").addEventListener("click", () => loadProjectTree(""));
+
+document.getElementById("play-build-and-run").addEventListener("click", buildAndRunWeb);
+document.getElementById("play-stop").addEventListener("click", stopPlay);
+document.getElementById("play-refresh").addEventListener("click", loadPlayStatus);
 
 document.getElementById("show-file-size").addEventListener("change", (e) => {
   for (const el of document.querySelectorAll(".file-size")) {
