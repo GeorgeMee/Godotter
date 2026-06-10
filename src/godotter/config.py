@@ -113,5 +113,5 @@ def get_settings() -> Settings:
 
         for k, v in merged.items():
             # Do not override shell environment variables.
-            os.environ.setdefault(k, v)
+            os.environ[k] = v
     return Settings()
