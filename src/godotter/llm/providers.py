@@ -17,14 +17,15 @@ class ProviderSpec:
 SUPPORTED_PROVIDERS = ('stub', 'deepseek', 'siliconflow', 'alibaba', 'moonshot')
 
 
-def build_provider_spec(settings: Settings, provider: str) -> ProviderSpec:
+def build_provider_spec(settings: Settings, provider: str, *, model_override: str | None = None) -> ProviderSpec:
     normalized = provider.strip().lower()
+    model = model_override or getattr(settings, f'{normalized}_model', None) or ''
     if normalized == 'deepseek':
         return ProviderSpec(
             name='deepseek',
             region='china',
             base_url=settings.deepseek_base_url.rstrip('/'),
-            model=settings.deepseek_model,
+            model=model or settings.deepseek_model,
             api_key=_require_key('DEEPSEEK_API_KEY', settings.deepseek_api_key),
         )
     if normalized == 'siliconflow':
@@ -32,7 +33,7 @@ def build_provider_spec(settings: Settings, provider: str) -> ProviderSpec:
             name='siliconflow',
             region='china',
             base_url=settings.siliconflow_base_url.rstrip('/'),
-            model=settings.siliconflow_model,
+            model=model or settings.siliconflow_model,
             api_key=_require_key('SILICONFLOW_API_KEY', settings.siliconflow_api_key),
         )
     if normalized == 'alibaba':
@@ -40,7 +41,7 @@ def build_provider_spec(settings: Settings, provider: str) -> ProviderSpec:
             name='alibaba',
             region='china',
             base_url=settings.alibaba_base_url.rstrip('/'),
-            model=settings.alibaba_model,
+            model=model or settings.alibaba_model,
             api_key=_require_key('ALIBABA_API_KEY', settings.alibaba_api_key),
         )
     if normalized == 'moonshot':
@@ -48,7 +49,7 @@ def build_provider_spec(settings: Settings, provider: str) -> ProviderSpec:
             name='moonshot',
             region='china',
             base_url=settings.moonshot_base_url.rstrip('/'),
-            model=settings.moonshot_model,
+            model=model or settings.moonshot_model,
             api_key=_require_key('MOONSHOT_API_KEY', settings.moonshot_api_key),
         )
     raise ValueError(f'Unsupported provider: {provider}')

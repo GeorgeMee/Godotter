@@ -35,6 +35,9 @@ Thumbs.db
 .vscode/
 .idea/
 *.code-workspace
+
+# Godotter
+.godotter/
 '''
 
 ICON_SVG_TEMPLATE = '''<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
@@ -187,6 +190,8 @@ def _copy_project_template(
 
     for source_path in template_dir.rglob('*'):
         rel = source_path.relative_to(template_dir)
+        if rel.parts and rel.parts[0] == '.godotter':
+            continue
         target_path = project_path / rel
 
         if source_path.is_dir():

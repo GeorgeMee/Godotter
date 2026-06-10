@@ -55,7 +55,17 @@ class ExportDoctorReport:
     godot_version: str | None
     templates_root: str | None
     templates_detected: bool
-    ok: bool
+    android_sdk_path: str | None = None
+    android_sdk_valid: bool = False
+    android_build_tools_version: str | None = None
+    android_adb_exists: bool = False
+    java_home: str | None = None
+    java_valid: bool = False
+    java_version: str | None = None
+    keystore_path: str | None = None
+    keystore_valid: bool = False
+    android_template_installed: bool = False
+    ok: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -109,6 +119,19 @@ def run_export_build(
     root = workspace_root.resolve()
     output_path = _resolve_output(root, output) if output is not None else default_export_output(root, build_id, preset)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Auto-install Android build template if missing
+    if "android" in preset.lower():
+        aar = root / "android" / "build" / "libs" / "release" / "godot-lib.template_release.aar"
+        if not aar.exists():
+            subprocess.run(
+                [godot_path, "--headless", "--path", root.as_posix(), "--install-android-build-template"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
     command = [
         godot_path,
         "--headless",
@@ -166,7 +189,16 @@ def list_build_reports(workspace_root: Path) -> list[dict[str, object]]:
     return reports
 
 
-def run_export_doctor(*, workspace_root: Path, godot_path: str | None = None, timeout: int = 15) -> ExportDoctorReport:
+def run_export_doctor(
+    *,
+    workspace_root: Path,
+    godot_path: str | None = None,
+    timeout: int = 15,
+    templates_path: str | None = None,
+    android_sdk_path: str | None = None,
+    java_home: str | None = None,
+    keystore_path: str | None = None,
+) -> ExportDoctorReport:
     root = workspace_root.resolve()
     project_exists = (root / "project.godot").exists()
     presets_path = root / "export_presets.cfg"
@@ -175,8 +207,62 @@ def run_export_doctor(*, workspace_root: Path, godot_path: str | None = None, ti
     godot_configured = bool(godot_path)
     godot_path_exists = bool(godot_path and Path(godot_path).exists())
     godot_version = _detect_godot_version(godot_path, timeout=timeout) if godot_path_exists else None
-    templates_root = find_export_templates_root(godot_version)
+    templates_root = find_export_templates_root(godot_version, templates_path=templates_path)
     templates_detected = bool(templates_root and Path(templates_root).exists() and any(Path(templates_root).rglob("*")))
+
+    # Android SDK
+    sdk_path = android_sdk_path or os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    sdk_valid = False
+    build_tools_ver: str | None = None
+    adb_exists = False
+    if sdk_path:
+        sdk = Path(sdk_path)
+        adb = sdk / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
+        adb_exists = adb.exists()
+        bt_dir = sdk / "build-tools"
+        if bt_dir.exists():
+            for child in sorted(bt_dir.iterdir(), reverse=True):
+                if child.is_dir() and (child / ("apksigner.bat" if os.name == "nt" else "apksigner")).exists():
+                    build_tools_ver = child.name
+                    break
+        sdk_valid = adb_exists and build_tools_ver is not None
+
+    # JDK
+    jdk_path = java_home or os.environ.get("JAVA_HOME")
+    jdk_valid = False
+    jdk_version: str | None = None
+    if jdk_path:
+        java_bin = Path(jdk_path) / "bin" / ("java.exe" if os.name == "nt" else "java")
+        if java_bin.exists():
+            try:
+                completed = subprocess.run(
+                    [str(java_bin), "-version"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                out = (completed.stdout + completed.stderr).strip()
+                jdk_valid = True
+                for line in out.splitlines():
+                    line = line.strip()
+                    if "version" in line.lower() and line.startswith(("openjdk", "java")):
+                        jdk_version = line.split('"')[1] if '"' in line else line
+                        break
+                    elif "Runtime" in line or "build" in line.lower():
+                        continue
+                if jdk_version is None:
+                    jdk_version = out.splitlines()[0].strip()
+            except Exception:
+                jdk_version = "detected"
+
+    # Keystore
+    ks_path = keystore_path
+    ks_valid = False
+    if ks_path and Path(ks_path).exists():
+        ks_valid = True
+
+    # Android build template
+    aar = root / "android" / "build" / "libs" / "release" / "godot-lib.template_release.aar"
+    android_template_installed = aar.exists()
+
     errors: list[str] = []
     warnings: list[str] = []
     if not project_exists:
@@ -191,7 +277,26 @@ def run_export_doctor(*, workspace_root: Path, godot_path: str | None = None, ti
         errors.append("GODOT_PATH does not point to an existing executable")
     if godot_path_exists and not templates_detected:
         warnings.append("Godot export templates were not detected in the standard user template directory")
-    ok = project_exists and export_presets_exists and bool(presets) and godot_configured and godot_path_exists
+    if not sdk_path:
+        warnings.append("Android SDK path is not configured (set GODOTTER_ANDROID_SDK_PATH or ANDROID_HOME)")
+    elif not sdk_valid:
+        warnings.append("Android SDK is incomplete: missing platform-tools or build-tools")
+    if not jdk_path:
+        warnings.append("Java JDK path is not configured (set GODOTTER_JAVA_HOME or JAVA_HOME)")
+    elif not jdk_valid:
+        warnings.append("Java JDK binary not found at configured path")
+    if not ks_path:
+        warnings.append("Android keystore is not configured (set GODOTTER_ANDROID_KEYSTORE_PATH)")
+    elif not ks_valid:
+        errors.append("Android keystore file not found at configured path")
+
+    ok = (
+        project_exists
+        and export_presets_exists
+        and bool(presets)
+        and godot_configured
+        and godot_path_exists
+    )
     return ExportDoctorReport(
         workspace_root=root.as_posix(),
         project_exists=project_exists,
@@ -202,6 +307,16 @@ def run_export_doctor(*, workspace_root: Path, godot_path: str | None = None, ti
         godot_version=godot_version,
         templates_root=templates_root,
         templates_detected=templates_detected,
+        android_sdk_path=sdk_path,
+        android_sdk_valid=sdk_valid,
+        android_build_tools_version=build_tools_ver,
+        android_adb_exists=adb_exists,
+        java_home=jdk_path,
+        java_valid=jdk_valid,
+        java_version=jdk_version,
+        keystore_path=ks_path,
+        keystore_valid=ks_valid,
+        android_template_installed=android_template_installed,
         ok=ok,
         errors=errors,
         warnings=warnings,
@@ -232,11 +347,20 @@ def parse_export_presets(path: Path) -> list[ExportPreset]:
     ]
 
 
-def find_export_templates_root(godot_version: str | None = None) -> str | None:
+def find_export_templates_root(godot_version: str | None = None, *, templates_path: str | None = None) -> str | None:
+    if templates_path:
+        return templates_path
     appdata = os.environ.get("APPDATA")
     if not appdata:
+        appdata = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    if not appdata:
         return None
+    # On Linux/macOS, templates typically live under ~/.local/share/godot/export_templates
     base = Path(appdata) / "Godot" / "export_templates"
+    if not base.exists():
+        alt = Path(appdata) / ".local" / "share" / "godot" / "export_templates"
+        if alt.exists():
+            base = alt
     if not base.exists():
         return base.as_posix()
     version_keys = _template_version_keys(godot_version)

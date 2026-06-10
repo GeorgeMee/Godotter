@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 import hashlib
+import re
 import secrets
 import subprocess
 import json
@@ -11,7 +12,7 @@ import sys
 import typer
 
 from godotter.agent import Agent
-from godotter.config import get_settings
+from godotter.config import Settings, get_settings
 from godotter.context import Memory
 from godotter.llm import SUPPORTED_PROVIDERS, create_brain
 from godotter.logging import configure_logging, get_logger
@@ -39,7 +40,7 @@ from godotter.operations import (
     test_kind_pattern,
 )
 from godotter.runtime import (
-    default_verify_commands,
+
     fix_uid_paths,
     latest_verify_report_path,
     list_build_reports,
@@ -48,6 +49,7 @@ from godotter.runtime import (
     run_export_doctor,
     run_verify,
 )
+from godotter.runtime.builds import find_export_templates_root, _detect_godot_version
 from godotter.runtime.validators import validate_managers, validate_nodepaths, validate_paths, validate_structure
 from godotter.tasks.planpack import (
     PlanPack,
@@ -56,7 +58,7 @@ from godotter.tasks.planpack import (
     load_planpack,
     load_planstate,
     new_plan_id,
-    new_task_id,
+
     plan_state_path,
     write_planpack,
     write_planstate,
@@ -76,7 +78,34 @@ from godotter.tasks.runstate import (
     write_runstate,
 )
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, load_workpack, write_workpack
-from godotter.tools import ToolRegistry, build_default_tools
+from godotter.tools import ToolContext, ToolRegistry, build_default_tools
+from godotter.context.project_summary import build_project_summary, render_project_summary
+from godotter.context.scout_context import build_chat_scout_context
+from godotter.utils.envfile import EnvFile
+
+
+def _resolve_workspace_root(
+    base_settings: Settings,
+    workspace: Path | None = None,
+    project: str | None = None,
+) -> tuple[Path, Settings]:
+    if workspace:
+        effective = workspace.resolve()
+        return effective, _copy_settings(base_settings, workspace_root=effective)
+    try:
+        target = resolve_runtime_target(base_settings, project=project)
+        effective = target.workspace_root
+        return effective, _copy_settings(base_settings, workspace_root=effective)
+    except Exception:
+        root = base_settings.workspace_root.resolve()
+        return root, _copy_settings(base_settings, workspace_root=root)
+
+
+def _copy_settings(base: Settings, **overrides) -> Settings:
+    try:
+        return base.model_copy(update=overrides)
+    except AttributeError:
+        return base
 
 
 def _ensure_utf8_stdio() -> None:
@@ -105,6 +134,7 @@ scene_app = typer.Typer(help='Create scenes and paired scripts (tscn + gd).')
 test_app = typer.Typer(help='Create and manage Godotter test harnesses.')
 scaffold_app = typer.Typer(help='Generate convention-compliant project files.')
 export_app = typer.Typer(help='Build and list Godot export packages.')
+template_app = typer.Typer(help='Configure export template paths.')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
@@ -116,6 +146,7 @@ app.add_typer(plan_app, name='plan')
 app.add_typer(scene_app, name='scene')
 app.add_typer(scaffold_app, name='scaffold')
 app.add_typer(export_app, name='export')
+export_app.add_typer(template_app, name='template')
 
 
 @app.callback()
@@ -153,8 +184,8 @@ def task_prepare_command(
         help='Additional file paths to include as relevant files (repeatable).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, settings = _resolve_workspace_root(base_settings, workspace=workspace)
     constraints = [
         'Obey Godotter dev-mode docs under Docs/.',
         'Levels must have a root Managers node and a Managers/EventBus child.',
@@ -197,8 +228,8 @@ def task_scout_command(
     ),
     max_files: int = typer.Option(40, '--max-files', help='Maximum number of relevant files to include.'),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, settings = _resolve_workspace_root(base_settings, workspace=workspace)
     scout = scout_workspace(root, goal, max_files=max_files)
 
     constraints = [
@@ -288,7 +319,7 @@ def task_run_command(
 ) -> None:
     base_settings = get_settings()
     normalized_mode, mode_note = _normalize_cli_mode(mode)
-    root = (workspace or base_settings.workspace_root).resolve()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     workpack_path = (root / '.godotter' / 'workpacks' / 'latest.json') if latest else (
         workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
     )
@@ -303,14 +334,17 @@ def task_run_command(
     configure_logging(settings)
     memory = Memory(settings.resolved_memory_path)
     registry = ToolRegistry(build_default_tools())
-    selected_brain = brain or settings.default_brain
+    selected_brain = brain or settings.resolved_act_brain
+    summary = build_project_summary(execution_root)
+    summary_text = render_project_summary(summary) if summary else None
     agent = Agent(
-        brain=create_brain(settings, selected_brain),
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'act_model', None)),
         settings=settings,
         registry=registry,
         memory=memory,
         mode=normalized_mode,
         brain_name=selected_brain,
+        project_summary=summary_text,
     )
 
     prompt_lines = [
@@ -339,6 +373,13 @@ def task_run_command(
                 '- If tool-calls are available, use apply_patch and other tools to make changes.',
                 '- If tool-calls are not available, output a single unified diff patch (no commentary).',
                 '- After changes, ensure verification commands pass.',
+                '',
+                'Before you finish, verify EVERY acceptance criterion below is met. If any is not done, continue working.',
+                'Checklist (you MUST confirm each item):',
+                *[f'  [ ] {step}' for step in pack.execution_plan],
+                '',
+                'Scope files that must be modified:',
+                *[f'  - {p}' for p in pack.relevant_files if p.reason == 'scope'],
             ]
         )
     if mode_note:
@@ -353,6 +394,7 @@ def task_run_command(
     last_signature: str | None = None
     same_failure_count = 0
     failure_report: str | None = None
+    agent_output: str = ''
     run_state, run_state_path = create_runstate(
         workspace_root=settings.workspace_root.resolve(),
         workpack_path=workpack_path.resolve(),
@@ -371,9 +413,19 @@ def task_run_command(
             attempt_prompt.extend(
                 [
                     '',
-                    f'Previous attempt failed (attempt={attempt_index - 1}). Fix the failure and re-run verification.',
-                    'Failure summary:',
+                    f'Previous attempt {attempt_index - 1} FAILED. You MUST debug and fix the root cause.',
+                    '',
+                    'Required diagnostic process:',
+                    '1. Read the verification output below carefully — identify what failed, what passed.',
+                    '2. Form a NEW hypothesis about the root cause. If your last hypothesis was about logic, consider timing/async/signal-lifecycle issues.',
+                    '3. If needed, add temporary debug prints (print("[DEBUG ...]")) to the failing code, then re-run the test to gather evidence.',
+                    '4. Once you have evidence, apply the fix and verify.',
+                    '',
+                    'Full verification output from the last attempt:',
                     failure_report,
+                    '',
+                    'Your last analysis (do NOT repeat this; try a different approach):',
+                    (agent_output or '')[-1200:],
                 ]
             )
 
@@ -394,17 +446,23 @@ def task_run_command(
                 settings.workspace_root.resolve(),
                 allow_no_changes=allow_no_changes,
                 strict=strict_audit,
+                scope_paths=[ref.path for ref in pack.relevant_files if ref.reason == 'scope'],
             )
         except typer.Exit as exc:
             _dump_task_debug(agent)
             failure_report = f'audit_failed={type(exc).__name__}'
             run_attempt.changed_files = _task_changed_paths(settings.workspace_root.resolve())
             signature = hashlib.sha256(failure_report.encode('utf-8', errors='replace')).hexdigest()
-            if stop_on_same_failure and signature == last_signature:
-                same_failure_count += 1
-            else:
-                same_failure_count = 1
-                last_signature = signature
+            if stop_on_same_failure:
+                agent_sig = hashlib.sha256(
+                    ((agent_output or '')[-800:]).encode('utf-8', errors='replace')
+                ).hexdigest()[:8]
+                combined = f'{signature}:{agent_sig}'
+                if combined == last_signature:
+                    same_failure_count += 1
+                else:
+                    same_failure_count = 1
+                    last_signature = combined
             if stop_on_same_failure and same_failure_count >= same_failure_limit:
                 verify_report = _record_failure_verify_report(
                     settings.workspace_root.resolve(),
@@ -454,11 +512,16 @@ def task_run_command(
             allow_existing=any('runtime verify' in command.lower() for command in pack.verification),
         )
 
-        if stop_on_same_failure and signature == last_signature:
-            same_failure_count += 1
-        else:
-            same_failure_count = 1
-            last_signature = signature
+        if stop_on_same_failure:
+            agent_sig = hashlib.sha256(
+                ((agent_output or '')[-800:]).encode('utf-8', errors='replace')
+            ).hexdigest()[:8]
+            combined = f'{signature}:{agent_sig}'
+            if combined == last_signature:
+                same_failure_count += 1
+            else:
+                same_failure_count = 1
+                last_signature = combined
         if stop_on_same_failure and same_failure_count >= same_failure_limit:
             typer.echo('task_run_retry_stop_reason=same_failure_repeated')
             finish_attempt(
@@ -499,9 +562,9 @@ def task_list_command(
         '--workspace',
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
-) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    ) -> None:
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     workpack_dir = root / '.godotter' / 'workpacks'
     if not workpack_dir.exists():
         typer.echo(f'workpack_dir={workpack_dir.as_posix()}')
@@ -537,9 +600,9 @@ def task_show_command(
         '--workspace',
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
-) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    ) -> None:
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     workpack_path = (root / '.godotter' / 'workpacks' / 'latest.json') if latest else (
         workpack or (root / '.godotter' / 'workpacks' / 'latest.json')
     )
@@ -573,23 +636,25 @@ def plan_prepare_command(
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for planning.'),
 ) -> None:
     base_settings = get_settings()
-    root = (workspace or base_settings.workspace_root).resolve()
-    settings = base_settings.model_copy(update={'workspace_root': root})
+    root, settings = _resolve_workspace_root(base_settings, workspace=workspace)
 
     configure_logging(settings)
     memory = Memory(settings.resolved_memory_path)
     registry = ToolRegistry(build_default_tools())
-    selected_brain = brain or settings.default_brain
+    selected_brain = brain or settings.resolved_plan_brain
+    summary = build_project_summary(root)
+    summary_text = render_project_summary(summary) if summary else None
     agent = Agent(
-        brain=create_brain(settings, selected_brain),
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'plan_model', None)),
         settings=settings,
         registry=registry,
         memory=memory,
         mode='plan',
         brain_name=selected_brain,
+        project_summary=summary_text,
     )
-    # PlanPack generation must be a pure text/JSON response. Some providers may
-    # otherwise emit tool-calls-only (empty text), which breaks JSON parsing.
+    # PlanPack generation must be a pure text/JSON response. Tools would
+    # cause the LLM to make changes instead of outputting a JSON plan.
     agent.brain.tools = []
     if hasattr(agent.brain, 'tool_choice'):
         setattr(agent.brain, 'tool_choice', 'none')
@@ -605,10 +670,22 @@ def plan_prepare_command(
     try:
         parsed = json.loads(raw_stripped)
     except Exception:
-        # Try to extract the first JSON object from a mixed response.
-        start = raw_stripped.find('{')
+        # Try to extract the JSON object from a mixed response.
         end = raw_stripped.rfind('}')
-        if start != -1 and end != -1 and end > start:
+        if end == -1:
+            debug_path = root / '.godotter' / 'plans' / 'last_planner_output.txt'
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
+            raise typer.BadParameter(
+                f'Planner did not return JSON: could not find JSON object (saved raw to {debug_path.as_posix()})'
+            )
+        # Find "tasks" keyword first, then locate the root { before it.
+        tasks_pos = raw_stripped.rfind('"tasks"', 0, end)
+        if tasks_pos != -1:
+            start = raw_stripped.rfind('{', 0, tasks_pos)
+        else:
+            start = raw_stripped.rfind('{', 0, end)
+        if start != -1 and end > start:
             try:
                 parsed = json.loads(raw_stripped[start : end + 1])
             except Exception as exc:
@@ -687,9 +764,9 @@ def plan_list_command(
         '--workspace',
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
-) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    ) -> None:
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     plan_dir = root / '.godotter' / 'plans'
     if not plan_dir.exists():
         typer.echo(f'plan_dir={plan_dir.as_posix()}')
@@ -716,9 +793,9 @@ def plan_show_command(
         '--workspace',
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
-) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    ) -> None:
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     plan_path = (root / '.godotter' / 'plans' / 'latest.json') if latest else (plan or (root / '.godotter' / 'plans' / 'latest.json'))
     if not plan_path.exists():
         raise typer.BadParameter(f'PlanPack not found: {plan_path}')
@@ -743,8 +820,8 @@ def plan_status_command(
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     plan_path = (root / '.godotter' / 'plans' / 'latest.json') if latest else (plan or (root / '.godotter' / 'plans' / 'latest.json'))
     if not plan_path.exists():
         raise typer.BadParameter(f'PlanPack not found: {plan_path}')
@@ -795,7 +872,7 @@ def plan_run_command(
     brain: str | None = typer.Option(None, '--brain', help='Override default brain/provider for execution.'),
 ) -> None:
     base_settings = get_settings()
-    root = (workspace or base_settings.workspace_root).resolve()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     plan_path = (root / '.godotter' / 'plans' / 'latest.json') if latest else (plan or (root / '.godotter' / 'plans' / 'latest.json'))
     if not plan_path.exists():
         raise typer.BadParameter(f'PlanPack not found: {plan_path}')
@@ -859,7 +936,7 @@ def plan_run_command(
 
         # Build a WorkPack from task details.
         settings = base_settings.model_copy(update={'workspace_root': root})
-        selected_brain = brain or settings.default_brain
+        selected_brain = brain or settings.resolved_act_brain
 
         scout_refs: list[WorkPackFileRef] = []
         if not task.scope:
@@ -932,6 +1009,29 @@ def project_new_command(
     typer.echo(render_project_scaffold_summary(result, no_git=no_git))
 
 
+@project_app.command('root-show', help='Show the default parent directory for new projects.')
+def project_root_show_command() -> None:
+    settings = get_settings()
+    root = Path(settings.projects_root)
+    if not root.is_absolute():
+        root = (Path.cwd() / root).resolve()
+    root = root.resolve()
+    typer.echo(f'projects_root={root.as_posix()}')
+    typer.echo(f'exists={str(root.exists()).lower()}')
+
+
+@project_app.command('root-set', help='Set the default parent directory for new projects.')
+def project_root_set_command(
+    path: str = typer.Argument(..., help='Directory path where new projects will be created.'),
+) -> None:
+    resolved = Path(path).resolve()
+    if not resolved.exists():
+        raise typer.BadParameter(f'Path does not exist: {resolved}')
+    EnvFile(Path('.env')).set('GODOTTER_PROJECTS_ROOT', resolved.as_posix())
+    get_settings.cache_clear()
+    typer.echo(f'projects_root={resolved.as_posix()}')
+
+
 @scene_app.command('new', help='Create a scene (.tscn) and paired script (.gd) together.')
 def scene_new_command(
     path: str = typer.Argument(..., help='Scene path (res://... or workspace-relative), must end with .tscn.'),
@@ -956,8 +1056,8 @@ def scene_new_command(
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     try:
         if no_script:
             if script_path:
@@ -1005,8 +1105,8 @@ def scene_create_command(
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     try:
         result = scaffold_scene_only(
             workspace_root=root,
@@ -1067,8 +1167,8 @@ def _scaffold_test_command(
     force: bool,
     workspace: Path | None,
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     try:
         result = scaffold_test(workspace_root=root, name=name, kind=kind, force=force)
     except ValueError as exc:
@@ -1143,7 +1243,15 @@ def export_doctor_command(
 ) -> None:
     settings = get_settings()
     target = resolve_runtime_target(settings, project=project)
-    report = run_export_doctor(workspace_root=target.workspace_root, godot_path=target.godot_path, timeout=timeout)
+    report = run_export_doctor(
+        workspace_root=target.workspace_root,
+        godot_path=target.godot_path,
+        timeout=timeout,
+        templates_path=settings.export_templates_path,
+        android_sdk_path=settings.android_sdk_path,
+        java_home=settings.java_home,
+        keystore_path=settings.android_keystore_path,
+    )
     typer.echo(f'workspace_root={report.workspace_root}')
     typer.echo(f'project_godot={str(report.project_exists).lower()}')
     typer.echo(f'export_presets={str(report.export_presets_exists).lower()}')
@@ -1155,6 +1263,22 @@ def export_doctor_command(
     typer.echo(f'godot_version={report.godot_version or ""}')
     typer.echo(f'templates_root={report.templates_root or ""}')
     typer.echo(f'templates_detected={str(report.templates_detected).lower()}')
+
+    typer.echo(f'android_sdk_path={report.android_sdk_path or "(not set)"}')
+    typer.echo(f'android_sdk_valid={str(report.android_sdk_valid).lower()}')
+    if report.android_build_tools_version:
+        typer.echo(f'android_build_tools={report.android_build_tools_version}')
+    typer.echo(f'android_adb={str(report.android_adb_exists).lower()}')
+
+    typer.echo(f'java_home={report.java_home or "(not set)"}')
+    typer.echo(f'java_valid={str(report.java_valid).lower()}')
+    if report.java_version:
+        typer.echo(f'java_version={report.java_version}')
+
+    typer.echo(f'keystore_path={report.keystore_path or "(not set)"}')
+    typer.echo(f'keystore_valid={str(report.keystore_valid).lower()}')
+    typer.echo(f'android_template_installed={str(report.android_template_installed).lower()}')
+
     for warning in report.warnings:
         typer.echo(f'warning={warning}')
     for error in report.errors:
@@ -1162,6 +1286,37 @@ def export_doctor_command(
     typer.echo(f'ok={str(report.ok).lower()}')
     if not report.ok:
         raise typer.Exit(1)
+
+
+@template_app.command('set', help='Set the path to Godot export templates.')
+def export_template_set_command(
+    path: str = typer.Argument(..., help='Path to the export templates directory.'),
+) -> None:
+    resolved = Path(path).resolve()
+    if not resolved.exists():
+        raise typer.BadParameter(f'Path does not exist: {resolved}')
+    EnvFile(Path('.env')).set('GODOTTER_EXPORT_TEMPLATES_PATH', resolved.as_posix())
+    typer.echo(f'export-templates-path={resolved.as_posix()}')
+
+
+@template_app.command('show', help='Show the current export templates path configuration.')
+def export_template_show_command() -> None:
+    settings = get_settings()
+    configured = settings.export_templates_path
+    if configured:
+        exists = ' (exists)' if Path(configured).exists() else ' (NOT FOUND)'
+        typer.echo(f'configured: {configured}{exists}')
+    else:
+        typer.echo('configured: (not set)')
+    godot_path = settings.godot_path
+    if godot_path and Path(godot_path).exists():
+        version = _detect_godot_version(godot_path, timeout=15)
+        if version:
+            auto = find_export_templates_root(version)
+            if auto:
+                typer.echo(f'auto-detected: {auto}')
+            else:
+                typer.echo('auto-detected: (not found)')
 
 
 @app.command('new', hidden=True)
@@ -1182,24 +1337,50 @@ def chat_command(
         help='Agent execution mode: plan or act. Deprecated aliases: review->plan, code/debug->act.',
     ),
     brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider for this session.'),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to GODOTTER_WORKSPACE_ROOT or the default project).',
+    ),
+    project: str | None = typer.Option(
+        None,
+        '--project',
+        help='Project name from config/projects.toml (uses default project if omitted).',
+    ),
+    no_scout: bool = typer.Option(
+        False,
+        '--no-scout',
+        help='Skip automatic workspace scouting (sends raw message only).',
+    ),
 ) -> None:
-    settings = get_settings()
+    base_settings = get_settings()
     normalized_mode, mode_note = _normalize_cli_mode(mode)
+    root, settings = _resolve_workspace_root(base_settings, workspace=workspace, project=project)
     configure_logging(settings)
     memory = Memory(settings.resolved_memory_path)
     registry = ToolRegistry(build_default_tools())
     selected_brain = brain or settings.default_brain
+    summary = build_project_summary(root)
+    summary_text = render_project_summary(summary) if summary else None
     agent = Agent(
-        brain=create_brain(settings, selected_brain),
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'chat_model', None)),
         settings=settings,
         registry=registry,
         memory=memory,
         mode=normalized_mode,
         brain_name=selected_brain,
+        project_summary=summary_text,
     )
     if mode_note:
         typer.echo(mode_note)
-    typer.echo(agent.handle_input(message))
+
+    enriched_message = message
+    if not no_scout:
+        scout_context = build_chat_scout_context(root, message)
+        if scout_context:
+            enriched_message = f'{message}\n\n--- Relevant project context (auto-scanned) ---\n{scout_context}'
+
+    typer.echo(agent.handle_input(enriched_message))
 
 
 def _normalize_cli_mode(raw_mode: str) -> tuple[str, str | None]:
@@ -1224,6 +1405,7 @@ def _audit_task_run_changes(
     *,
     allow_no_changes: bool = False,
     strict: bool = True,
+    scope_paths: list[str] | None = None,
 ) -> None:
     changed = [ref for ref in collect_changed_files(workspace_root) if not ref.path.startswith('.godotter/')]
     typer.echo(f'task_run_audit changed_files={len(changed)}')
@@ -1243,7 +1425,6 @@ def _audit_task_run_changes(
         for path in changed_paths
     )
     touches_tests = any(path.startswith('tests/') for path in changed_paths)
-    touches_levels = any(path.startswith('game/levels/') for path in changed_paths)
     expected_test_dirs = expected_test_dirs_for_paths(changed_paths)
     missing_expected_tests = [
         test_dir for test_dir in expected_test_dirs if not any(path.startswith(test_dir) for path in changed_paths)
@@ -1261,6 +1442,12 @@ def _audit_task_run_changes(
             typer.echo(f'task_run_audit_error=missing_expected_test_layer dirs={message}')
             raise typer.Exit(1)
         typer.echo(f'task_run_audit_warn=missing_expected_test_layer dirs={message}')
+
+    if scope_paths:
+        uncovered = [p for p in scope_paths if not any(p in cp for cp in changed_paths)]
+        if uncovered:
+            for p in uncovered:
+                typer.echo(f'task_run_audit_warn=scope_file_not_covered path={p}')
 
 
 def _task_changed_paths(workspace_root: Path) -> list[str]:
@@ -1376,8 +1563,24 @@ def _rewrite_verification_command(workspace_root: Path, command: str) -> str:
         return 'uv run godotter runtime lint --project .'
     if raw == 'uv run godotter runtime lint --project . clean':
         return 'uv run godotter runtime lint --project .'
+    if raw in {'uv run godotter runtime verify', 'godotter runtime verify'}:
+        return f'{raw} --project .'
     if raw.startswith('uv run godotter runtime verify ') and (' --kind ' in raw or ' --name ' in raw):
-        return 'uv run godotter runtime verify'
+        return 'uv run godotter runtime verify --project .'
+    if raw.startswith('godotter runtime verify ') and (' --kind ' in raw or ' --name ' in raw):
+        return 'godotter runtime verify --project .'
+
+    # Map hallucinated subcommands to real commands.
+    if 'run-scene' in raw:
+        if ' --kind ' in raw:
+            raw = raw.replace('run-scene', 'test')
+            if '--project .' not in raw:
+                raw = raw.replace('uv run godotter runtime test', 'uv run godotter runtime test --project .')
+            raw = re.sub(r' --scene \S+', '', raw)
+        else:
+            raw = raw.replace('run-scene', 'run')
+            if '--project .' not in raw:
+                raw = raw.replace('uv run godotter runtime run', 'uv run godotter runtime run --project .')
 
     # Fix common case: planner uses bare filename for runtime lint.
     prefix = 'uv run godotter runtime lint --project . '
@@ -1507,15 +1710,21 @@ def provider_list_command() -> None:
     typer.echo('\n'.join(format_provider_rows(settings)))
 
 
-@provider_app.command('use', help='Set the default AI provider.')
+@provider_app.command('use', help='Set the default AI provider (optionally scoped to a task).')
 def provider_use_command(
     name: str = typer.Argument(..., help='Provider name (e.g., moonshot, deepseek, siliconflow, alibaba).'),
+    task: str | None = typer.Option(
+        None,
+        '--task',
+        help='Scope to a task type: chat, plan, or act. Omitting sets the global default.',
+    ),
 ) -> None:
     try:
-        selected = set_default_provider(name)
+        selected = set_default_provider(name, task=task)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    typer.echo(f'default provider set to {selected}')
+    label = f'{task} ' if task else ''
+    typer.echo(f'default {label}provider set to {selected}')
 
 
 @provider_app.command('check', help='Validate API key and connectivity for a provider.')
@@ -1523,10 +1732,22 @@ def provider_check_command(
     provider: str | None = typer.Option(
         None, '--provider', help='Provider name (defaults to current default provider).'
     ),
+    task: str | None = typer.Option(
+        None,
+        '--task',
+        help='Check the provider configured for a specific task: chat, plan, or act.',
+    ),
     timeout: int = typer.Option(10, '--timeout', help='Timeout in seconds for the check request.'),
 ) -> None:
     settings = get_settings()
-    selected = normalize_provider_name(provider or settings.default_brain)
+    if task:
+        selected = {'chat': settings.resolved_chat_brain, 'plan': settings.resolved_plan_brain, 'act': settings.resolved_act_brain}.get(
+            task
+        )
+        if selected is None:
+            raise typer.BadParameter(f'Invalid task: {task}. Use chat, plan, or act.')
+    else:
+        selected = normalize_provider_name(provider or settings.default_brain)
     typer.echo(check_provider_connectivity(settings, selected, timeout=timeout))
 
 
@@ -1648,6 +1869,11 @@ def runtime_test_command(
         '--fail-on-stderr',
         help='Semicolon-separated substrings; if any appears in stderr, mark test as failed.',
     ),
+    diagnose: bool = typer.Option(
+        False,
+        '--diagnose',
+        help='On failure, parse test output and emit a structured failure summary for agent consumption.',
+    ),
 ) -> None:
     settings = get_settings()
     runner = build_runner(settings, project=project)
@@ -1716,7 +1942,68 @@ def runtime_test_command(
         typer.echo(f'failures={len(failures)}')
         for s in failures[:25]:
             typer.echo(f'failure={s}')
+        if diagnose:
+            _emit_test_diagnose(failures, unique, runner, timeout, bad_markers)
         raise typer.Exit(1)
+
+
+def _emit_test_diagnose(
+    failures: list[str],
+    scenes: list[Path],
+    runner,
+    timeout: int,
+    bad_markers: list[str],
+) -> None:
+    """Re-run each failing scene once and parse stderr for structured failure analysis."""
+    typer.echo('')
+    typer.echo('diagnose')
+    for scene_res in failures:
+        result = runner.run_project(timeout=timeout, scene=scene_res, headless=True)
+        stderr = result.stderr or ''
+        stdout = result.stdout or ''
+
+        fail_lines = [line.strip() for line in stderr.splitlines() if 'FAIL:' in line]
+        pass_lines = [line.strip() for line in stdout.splitlines() if 'PASS:' in line]
+        assert_count = len(pass_lines) + len(fail_lines)
+
+        typer.echo(f'  scene: {scene_res}')
+        typer.echo(f'  exit_code: {result.exit_code}')
+        typer.echo(f'  assertions_total: {assert_count}')
+        typer.echo(f'  assertions_passed: {len(pass_lines)}')
+        typer.echo(f'  assertions_failed: {len(fail_lines)}')
+
+        for fl in fail_lines:
+            typer.echo(f'  failed: {fl.removeprefix("FAIL: ").strip()}')
+
+        # Extract last meaningful lines from stdout (skip verbose engine output)
+        relevant_lines = [
+            line for line in stdout.splitlines()
+            if line.strip() and not any(
+                prefix in line for prefix in ('Godot Engine', 'Vulkan', 'OpenGL', 'ERROR: Condition', 'ERROR:', 'WARNING:', '   at:')
+            )
+        ]
+        last = relevant_lines[-15:]
+        if last:
+            typer.echo('  last_stdout:')
+            for line in last:
+                typer.echo(f'    {line.strip()[:200]}')
+
+        # Simple heuristic suggestions
+        suggestions = []
+        stderr_lower = stderr.lower()
+        if 'expected ' in stderr_lower and "got ''" in stderr_lower:
+            suggestions.append('variable_set_in_callback_but_read_as_empty — check signal timing, try await get_tree().process_frame before assertion')
+        if 'not in bounds' in stderr_lower or 'wall collision' in stderr_lower:
+            suggestions.append('unexpected_wall_collision — check grid_size or position initialization')
+        if 'unexpectedly' in stderr_lower or 'died unexpectedly' in stderr_lower:
+            suggestions.append('unexpected_death — check collision detection or initial body placement')
+        if 'body should' in stderr_lower or 'size is' in stderr_lower:
+            suggestions.append('body_size_mismatch — check grow_pending logic or tail removal')
+        if suggestions:
+            typer.echo('  suggest:')
+            for s in suggestions:
+                typer.echo(f'    - {s}')
+        typer.echo('')
 
 
 @runtime_app.command('verify', help='Run standard validation/lint/tests and write a VerifyReport JSON.')
@@ -1787,8 +2074,8 @@ def runtime_validate_structure_command(
         help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     report = validate_structure(root)
     typer.echo(f'workspace_root={root.as_posix()}')
     typer.echo(f'ok={str(report.ok).lower()}')
@@ -1811,8 +2098,8 @@ def runtime_validate_managers_command(
         help='Levels root directory (defaults to workspace/game/levels).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     if levels:
         levels_root = levels.resolve() if levels.is_absolute() else (root / levels).resolve()
     else:
@@ -1840,8 +2127,8 @@ def runtime_validate_nodepaths_command(
         help='Scenes root directory (defaults to workspace/game/levels).',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     if scenes:
         scenes_root = scenes.resolve() if scenes.is_absolute() else (root / scenes).resolve()
     else:
@@ -1869,8 +2156,8 @@ def runtime_validate_paths_command(
         help='Rewrite unresolved paths when exactly one safe suggestion is available.',
     ),
 ) -> None:
-    settings = get_settings()
-    root = (workspace or settings.workspace_root).resolve()
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
     report = validate_paths(root, fix=fix)
     typer.echo(f'workspace_root={root.as_posix()}')
     typer.echo(f'fix={str(fix).lower()}')

@@ -27,9 +27,17 @@ def normalize_provider_name(name: str) -> str:
 def format_provider_rows(settings) -> list[str]:
     rows: list[str] = []
     for provider in SUPPORTED_PROVIDERS:
-        marker = '*' if provider == settings.default_brain else ' '
+        default_marker = '*' if provider == settings.default_brain else ''
+        tasks: list[str] = []
+        if provider == (settings.chat_brain or '').strip().lower():
+            tasks.append('chat')
+        if provider == (settings.plan_brain or '').strip().lower():
+            tasks.append('plan')
+        if provider == (settings.act_brain or '').strip().lower():
+            tasks.append('act')
+        task_tag = f' [{", ".join(tasks)}]' if tasks else ''
         model = current_model_for_provider(settings, provider)
-        rows.append(f'{marker} {provider}: model={model}')
+        rows.append(f'{default_marker or " "} {provider}:{task_tag} model={model}')
     return rows
 
 
@@ -98,9 +106,15 @@ def fetch_model_rows(settings, provider: str) -> list[str]:
     return rows
 
 
-def set_default_provider(provider: str, env_path: Path = Path('.env')) -> str:
+def set_default_provider(provider: str, env_path: Path = Path('.env'), *, task: str | None = None) -> str:
     selected = normalize_provider_name(provider)
-    EnvFile(env_path).set('GODOTTER_DEFAULT_BRAIN', selected)
+    if task:
+        task_key = {'chat': 'GODOTTER_CHAT_BRAIN', 'plan': 'GODOTTER_PLAN_BRAIN', 'act': 'GODOTTER_ACT_BRAIN'}.get(task)
+        if task_key is None:
+            raise ValueError(f'Invalid task: {task}. Use chat, plan, or act.')
+        EnvFile(env_path).set(task_key, selected)
+    else:
+        EnvFile(env_path).set('GODOTTER_DEFAULT_BRAIN', selected)
     return selected
 
 
