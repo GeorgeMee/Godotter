@@ -29,11 +29,13 @@ class Agent:
         memory: Memory | None = None,
         mode: str = 'plan',
         brain_name: str = 'stub',
+        project_summary: str | None = None,
     ) -> None:
         self.brain = brain
         self.settings = settings
         self.registry = registry
         self.memory = memory
+        self.project_summary = project_summary
         self.state = AgentState(mode=mode, brain_name=brain_name)
         self._refresh_brain_context()
 
@@ -67,7 +69,12 @@ class Agent:
 
     def _agentic_loop(self) -> str:
         output_parts: list[str] = []
-        for _ in range(10):
+        for turn_index in range(10):
+            if turn_index == 0 and self.mode == 'plan' and hasattr(self.brain, 'tool_choice'):
+                setattr(self.brain, 'tool_choice', 'required')
+            elif turn_index == 1 and self.mode == 'plan' and hasattr(self.brain, 'tool_choice'):
+                setattr(self.brain, 'tool_choice', 'auto')
+
             thought = self.brain.think(self.conversation)
             self.conversation.append(self._assistant_message(thought))
             if thought.text:
@@ -84,8 +91,6 @@ class Agent:
                         'content': result,
                     }
                 )
-                # If the model is using tool-calls-only (empty text), surface tool
-                # results to the caller so CLI users still see progress/errors.
                 if not thought.text and result:
                     output_parts.append(result)
         return '\n\n'.join(part for part in output_parts if part)
@@ -143,14 +148,28 @@ class Agent:
 
     def _build_system_prompt(self) -> str:
         parts = []
+        if self.project_summary:
+            parts.append(self.project_summary)
         if self.memory is not None:
             parts.append(self.memory.content)
         parts.append(f'Current mode: {self.mode}.')
         if self.mode == 'act':
             parts.append(
-                'Act mode rules: make real workspace changes. Prefer tool calls (apply_patch, etc). '
-                'If tool calls are unavailable, output a single unified diff starting with "diff --git" and nothing else.'
+                'Act mode rules: make real workspace changes using apply_patch. '
+                'Before writing any file, use tools to understand the project structure and conventions. '
+                'Read Docs/Conventions.md if it exists in the workspace. '
+                'Game scenes under game/levels/ or game/features/ must NEVER contain auto-quit, '
+                'get_tree().quit(), or --scene detection. Those belong only in test harnesses under tests/. '
+                'Game systems should self-initialize their tick loops; do not rely on external callers to start them. '
+                'Use EventBus for cross-system communication; never call methods across systems directly. '
+                'Never guess command names, file paths, or directory structures — verify with tools.'
             )
         else:
-            parts.append('Use tools when structured repository inspection is needed.')
+            parts.append(
+                'Plan mode rules: analyze and plan, do not modify files. '
+                'When you need to diagnose or plan, ALWAYS use tools first '
+                '(project_info, scene_inspect, read_file, list_files, search_code, etc.) '
+                'to inspect the actual code and project state. '
+                'Never guess command names, file paths, or directory structures — verify with tools.'
+            )
         return '\n\n'.join(parts)

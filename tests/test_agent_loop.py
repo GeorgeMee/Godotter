@@ -337,3 +337,51 @@ def test_agent_preserves_reasoning_content_on_assistant_messages(tmp_path):
     assistant_messages = [item for item in agent.conversation if item.get('role') == 'assistant']
     assert assistant_messages
     assert assistant_messages[0]['reasoning_content'] == 'trace-1'
+
+
+def test_agent_project_summary_in_system_prompt(tmp_path):
+    values = {
+        'GODOTTER_WORKSPACE_ROOT': str(tmp_path),
+        'GODOTTER_MEMORY_PATH': '.godotter/memory.md',
+    }
+    settings = Settings(**values)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    summary_text = 'Project: TestGame\nWorkspace: /tmp/test\nMain scene: res://main.tscn'
+    agent = Agent(
+        StubBrain(),
+        settings=settings,
+        registry=registry,
+        memory=memory,
+        mode='plan',
+        project_summary=summary_text,
+    )
+    assert agent.project_summary == summary_text
+    assert 'TestGame' in agent.brain.system_prompt
+    assert 'Workspace: /tmp/test' in agent.brain.system_prompt
+
+
+def test_agent_plan_mode_prompt_encourages_tool_use(tmp_path):
+    values = {
+        'GODOTTER_WORKSPACE_ROOT': str(tmp_path),
+        'GODOTTER_MEMORY_PATH': '.godotter/memory.md',
+    }
+    settings = Settings(**values)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    agent = Agent(StubBrain(), settings=settings, registry=registry, memory=memory, mode='plan')
+    assert 'ALWAYS use tools first' in agent.brain.system_prompt
+    assert 'inspect the actual code' in agent.brain.system_prompt
+
+
+def test_agent_without_project_summary(tmp_path):
+    values = {
+        'GODOTTER_WORKSPACE_ROOT': str(tmp_path),
+        'GODOTTER_MEMORY_PATH': '.godotter/memory.md',
+    }
+    settings = Settings(**values)
+    memory = Memory(settings.resolved_memory_path)
+    registry = ToolRegistry(build_default_tools())
+    agent = Agent(StubBrain(), settings=settings, registry=registry, memory=memory, mode='plan')
+    assert agent.project_summary is None
+    assert 'Current mode: plan.' in agent.brain.system_prompt
