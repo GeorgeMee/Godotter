@@ -2811,7 +2811,7 @@ def projects_page(request: Request) -> str:
       }
 
       function itemHtml(item) {
-        const title = item.goal || item.name;
+        const title = item.name || item.goal;
         const meta = [
           item.created_at ? `created=${item.created_at}` : '',
           item.tasks !== undefined ? `tasks=${item.tasks}` : '',
