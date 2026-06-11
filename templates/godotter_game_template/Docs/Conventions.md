@@ -6,11 +6,13 @@ AI agents should read this before creating or modifying any files.
 ## Directory Structure
 
 ```
+cheat/             Developer tools (console, scene jumper, inspector, cheats)
 game/core/         Reusable engine-level code (events, bootstrap, input)
 game/systems/      Self-contained game systems (snake, grid, inventory)
 game/features/     Feature controllers that wire systems together
 game/content/      Art, audio, prefabs (no logic)
 game/levels/       Player-facing level scenes
+ui/                Player-facing UI (pause menu, game over, HUD)
 
 tests/core/        Core utility tests (event bus, input mapper)
 tests/systems/     System-level harness tests
@@ -46,7 +48,28 @@ Do NOT create directories outside this structure (e.g., no `game/scenes/`).
 - Subscribe in `configure(bus)` or `_ready()`
 - Use `EventTypes` constants, never raw strings
 
-## Auto-Start Pattern
+## UI Layers
+
+| Layer | z-index | Directory | Examples |
+|---|---|---|---|
+| Cheat Overlay | 100 | `cheat/overlay/` | Floating trigger, console, scene jumper |
+| Game UI | 50 | `ui/views/` | Pause menu, game over, dialogs |
+| HUD | 10 | `ui/views/` | HP, score, minimap |
+| Game World | 0 | `game/` | Characters, effects, level geometry |
+
+- cheat/ UI stays inside `cheat/` directory, never in `ui/`
+- ui/ is for player-facing game UI only
+- cheat/ uses `CanvasLayer` with `layer = 100`; game-ui uses `layer = 50`
+- cheat trigger is a floating button, draggable, semi-transparent, activated in debug builds
+
+## Cheat System
+
+- `cheat/autoload/cheat_bootstrap.gd` is registered as the last autoload
+- Activated only when `OS.is_debug_build()` or `application/config/dev_mode=true`
+- Floating trigger button (🔧) at bottom-right, click to open overlay
+- Overlay contains: reload current scene, scene jumper (lists all .tscn under game/levels/)
+- Scene jumper auto-scans `res://game/levels/` — no hardcoded path list needed
+- All cheat UI is touch-friendly: big buttons, no keyboard input required
 
 - Game systems (managers) should start their own tick loops in `_ready()` or `configure()`
 - Do NOT rely on an external "start" method being called
@@ -95,4 +118,5 @@ func _ready():
 ## References
 
 - Input system: `Docs/Input.md`
+- Cheat tools: `cheat/README.md`
 - Template event flow example: `game/features/item_pickup/` + `game/systems/inventory/` + `tests/features/item_pickup/`

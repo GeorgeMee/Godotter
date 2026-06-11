@@ -1,0 +1,31 @@
+[gd_scene load_steps=5 format=3 uid="{{UID_MAIN_SCENE}}"]
+
+[ext_resource type="Script" path="res://game/core/events/event_bus.gd" id="1_event_bus"]
+[ext_resource type="Script" path="res://game/core/bootstrap/managers.gd" id="2_managers"]
+[ext_resource type="Script" path="res://game/core/input/input_mapper.gd" id="3_input_mapper"]
+[ext_resource type="Script" path="res://game/levels/main_level.gd" id="4_main_level_script"]
+
+[node name="MainLevel" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("4_main_level_script")
+
+[node name="Managers" type="Node" parent="."]
+script = ExtResource("2_managers")
+
+[node name="EventBus" type="Node" parent="Managers"]
+script = ExtResource("1_event_bus")
+
+[node name="InputMapper" type="Node" parent="Managers" groups=["mgr:input"]]
+script = ExtResource("3_input_mapper")
+
+[node name="PlayBtn" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = 8
+offset_left = -80.0
+offset_top = -30.0
+offset_right = 80.0
+offset_bottom = 30.0
+text = "▶ PLAY"

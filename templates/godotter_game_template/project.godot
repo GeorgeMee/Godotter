@@ -5,9 +5,13 @@ config_version=5
 
 [application]
 config/name="{{PROJECT_NAME}}"
-run/main_scene="res://game/levels/main.tscn"
+run/main_scene="res://game/levels/main_level.tscn"
 config/icon="res://icon.svg"
+config/dev_mode=true
 
+[autoload]
+
+CheatBootstrap="*res://cheat/autoload/cheat_bootstrap.gd"
 
 [rendering]
 textures/vram_compression/import_etc2_astc=true
