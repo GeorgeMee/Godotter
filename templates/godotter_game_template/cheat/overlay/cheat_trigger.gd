@@ -29,8 +29,8 @@ func _process(_delta: float) -> void:
 	if not _is_dragging:
 		_is_dragging = gmp.distance_to(_drag_start_pos) > _tap_threshold
 	if _is_dragging:
-		var parent_layer := get_parent()
-		var parent_pos := parent_layer.global_position if parent_layer else Vector2.ZERO
+		var parent_layer: CanvasLayer = get_parent()
+		var parent_pos: Vector2 = parent_layer.global_position if parent_layer else Vector2.ZERO
 		position = gmp - _drag_offset - parent_pos
 
 
@@ -62,6 +62,6 @@ func _gui_input(event: InputEvent) -> void:
 		if not _is_dragging:
 			_is_dragging = (event.position - _drag_offset).length() > _tap_threshold
 		if _is_dragging:
-			var parent_layer := get_parent()
-			var parent_pos := parent_layer.global_position if parent_layer else Vector2.ZERO
+			var parent_layer: CanvasLayer = get_parent()
+			var parent_pos: Vector2 = parent_layer.global_position if parent_layer else Vector2.ZERO
 			position = event.position - _drag_offset - parent_pos + _drag_start_pos
