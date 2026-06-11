@@ -23,7 +23,6 @@ def test_project_new_command_creates_scaffold(monkeypatch, tmp_path):
     assert (project_root / 'game' / 'content' / 'prefabs').is_dir()
     assert (project_root / 'ui').is_dir()
     assert (project_root / 'ui' / 'views').is_dir()
-    assert (project_root / 'tests' / 'core').is_dir()
     assert not (project_root / '.godotter').exists()
     assert '.godotter/' in (project_root / '.gitignore').read_text(encoding='utf-8')
 

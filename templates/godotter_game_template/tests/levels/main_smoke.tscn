@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://main_smoke_template"]
-
-[ext_resource type="Script" path="res://tests/levels/test_main_smoke.gd" id="1_script"]
-
-[node name="MainSmoke" type="Node"]
-script = ExtResource("1_script")
