@@ -24,7 +24,7 @@ func slide_down() -> void:
 
 
 func _ready() -> void:
-	$Panel/VBoxContainer/CloseBtn.pressed.connect(slide_down)
+	$Panel/VBoxContainer/TopBar/CloseBtn.pressed.connect(slide_down)
 	$Panel/VBoxContainer/ReloadBtn.pressed.connect(_on_reload_pressed)
 	_populate_scenes()
 
