@@ -1427,6 +1427,9 @@ function enterFullscreen(mode) {
   const wrap = document.getElementById("play-frame-wrap");
   wrap.classList.toggle("portrait", mode === "portrait");
   wrap.classList.toggle("landscape", mode === "landscape");
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock(mode === "landscape" ? "landscape" : "portrait").catch(() => {});
+  }
   if (frame.requestFullscreen) {
     frame.requestFullscreen();
   } else if (frame.webkitRequestFullscreen) {
