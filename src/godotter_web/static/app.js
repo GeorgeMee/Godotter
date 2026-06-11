@@ -1466,10 +1466,30 @@ function stopPlay() {
   status.className = "badge";
 }
 
-function loadPlayStatus() {
-  if (_playBuildId) {
-    const frame = document.getElementById("play-frame");
-    frame.src = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(_playBuildId)}/preview/index.html`;
+async function loadPlayStatus() {
+  const msg = document.getElementById("play-message");
+  const status = document.getElementById("play-status");
+  const frame = document.getElementById("play-frame");
+  if (!currentProject) return;
+  try {
+    const result = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/builds`);
+    const builds = result.builds || [];
+    const webBuild = builds.find(b => b.preset && b.preset.toLowerCase().includes("web") && b.status === "passed");
+    if (webBuild) {
+      _playBuildId = webBuild.build_id;
+      frame.src = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(_playBuildId)}/preview/index.html`;
+      msg.textContent = "";
+      status.textContent = "运行中";
+      status.className = "badge green";
+    } else {
+      msg.textContent = "没有可用的 Web 构建。点击「构建并运行」创建。";
+      status.textContent = "停止";
+      status.className = "badge";
+    }
+  } catch (error) {
+    msg.textContent = `加载失败：${error.message}`;
+    status.textContent = "错误";
+    status.className = "badge";
   }
 }
 
