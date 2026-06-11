@@ -1422,14 +1422,8 @@ document.getElementById("build-refresh").addEventListener("click", loadBuilds);
 
 let _playBuildId = null;
 
-function enterFullscreen(mode) {
+function enterFullscreen() {
   const frame = document.getElementById("play-frame");
-  const wrap = document.getElementById("play-frame-wrap");
-  wrap.classList.toggle("portrait", mode === "portrait");
-  wrap.classList.toggle("landscape", mode === "landscape");
-  if (screen.orientation && screen.orientation.lock) {
-    screen.orientation.lock(mode === "landscape" ? "landscape" : "portrait").catch(() => {});
-  }
   if (frame.requestFullscreen) {
     frame.requestFullscreen();
   } else if (frame.webkitRequestFullscreen) {
@@ -1523,8 +1517,7 @@ document.getElementById("tree-root").addEventListener("click", () => loadProject
 document.getElementById("play-build-and-run").addEventListener("click", buildAndRunWeb);
 document.getElementById("play-stop").addEventListener("click", stopPlay);
 document.getElementById("play-refresh").addEventListener("click", loadPlayStatus);
-document.getElementById("play-portrait-fullscreen").addEventListener("click", () => enterFullscreen("portrait"));
-document.getElementById("play-landscape-fullscreen").addEventListener("click", () => enterFullscreen("landscape"));
+document.getElementById("play-fullscreen").addEventListener("click", enterFullscreen);
 
 document.getElementById("show-file-size").addEventListener("change", (e) => {
   for (const el of document.querySelectorAll(".file-size")) {
