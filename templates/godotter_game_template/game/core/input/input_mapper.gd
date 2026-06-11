@@ -13,9 +13,9 @@ var aliases: Dictionary = {
 	&"move_down": InputActionsScript.DOWN,
 	&"rotate": InputActionsScript.UP,
 	&"shoot": InputActionsScript.PRIMARY,
-	&"jump": InputActionsScript.PRIMARY,
 	&"interact": InputActionsScript.CONFIRM,
 	&"back": InputActionsScript.CANCEL,
+	&"alt_action": InputActionsScript.QUATERNARY,
 }
 
 
