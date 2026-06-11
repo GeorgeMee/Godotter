@@ -43,6 +43,32 @@ Do NOT create directories outside this structure (e.g., no `game/scenes/`).
 
 ## Event-Driven Architecture
 
+## Input System
+
+- `game/core/input/input_actions.gd` — defines all InputMap actions
+- `game/core/input/input_mapper.gd` — alias resolver (game action → base action)
+- `game/core/input/devices/` — platform-specific input device bindings (future)
+- `ui/controllers/` — virtual controller boards for mobile/touch
+
+### Default Actions
+
+LEFT/RIGHT/UP/DOWN · PRIMARY/SECONDARY/TERTIARY/QUATERNARY · CONFIRM/CANCEL/PAUSE
+
+### Mobile Controllers
+
+Projects can create custom boards by extending `VirtualController`:
+
+```gdscript
+extends VirtualController
+func _bind_buttons():
+    bind_button(^"DPad/Left", InputActions.LEFT)
+    bind_button(^"Actions/Primary", InputActions.PRIMARY)
+```
+
+Template provides `compact_board.tscn` — D-pad (left) + 4 face buttons ABXY (right) + Pause (top-right).
+
+## Event-Driven Architecture
+
 - Communication between systems/features goes through `EventBus`, not direct method calls
 - Publish events via `event_bus.publish(GameEvent.new(...))`
 - Subscribe in `configure(bus)` or `_ready()`
@@ -53,6 +79,7 @@ Do NOT create directories outside this structure (e.g., no `game/scenes/`).
 | Layer | z-index | Directory | Examples |
 |---|---|---|---|
 | Cheat Overlay | 100 | `cheat/overlay/` | Floating trigger, console, scene jumper |
+| Controller | 60 | `ui/controllers/` | Virtual gamepad boards |
 | Game UI | 50 | `ui/views/` | Pause menu, game over, dialogs |
 | HUD | 10 | `ui/views/` | HP, score, minimap |
 | Game World | 0 | `game/` | Characters, effects, level geometry |
