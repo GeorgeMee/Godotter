@@ -2,7 +2,6 @@ extends Control
 
 ## Floating trigger button — draggable, stays on top, activates cheat overlay.
 
-
 signal pressed
 
 var _dragging := false
@@ -12,9 +11,7 @@ var _tap_threshold := 10.0
 
 
 func _ready() -> void:
-	# Position at bottom-right corner
 	position = get_viewport().get_visible_rect().size - Vector2(60, 140)
-	# Make self semi-transparent
 	modulate.a = 0.5
 
 
@@ -22,37 +19,35 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
-				_start_drag(event.position)
+				_drag_start = position
+				_drag_offset = event.position
+				modulate.a = 0.9
 			else:
-				_end_drag()
-				if not _dragging and position.distance_to(_drag_start) < _tap_threshold:
+				modulate.a = 0.5
+				if not _dragging:
 					pressed.emit()
+				_dragging = false
 
-	if event is InputEventMouseMotion and _dragging:
-		position = get_global_mouse_position() - _drag_offset
+	if event is InputEventMouseMotion:
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			if not _dragging:
+				_dragging = position.distance_to(_drag_start) > _tap_threshold
+			if _dragging:
+				position = get_global_mouse_position() - _drag_offset
 
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			_start_drag(event.position)
+			_drag_start = position
+			_drag_offset = event.position
+			modulate.a = 0.9
 		else:
-			_end_drag()
-			if not _dragging and position.distance_to(_drag_start) < _tap_threshold:
+			modulate.a = 0.5
+			if not _dragging:
 				pressed.emit()
+			_dragging = false
 
-	if event is InputEventScreenDrag and _dragging:
-		position = event.position - _drag_offset + _drag_start
-
-
-func _start_drag(at: Vector2) -> void:
-	_dragging = false
-	_drag_start = position
-	_drag_offset = at
-	modulate.a = 0.9
-
-
-func _end_drag() -> void:
-	modulate.a = 0.5
-
-
-func _exit_tree() -> void:
-	queue_free()
+	if event is InputEventScreenDrag:
+		if not _dragging:
+			_dragging = position.distance_to(_drag_start) > _tap_threshold
+		if _dragging:
+			position = event.position - _drag_offset + _drag_start
