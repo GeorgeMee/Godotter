@@ -1,0 +1,58 @@
+[gd_scene load_steps=2 format=3 uid="{{UID_CHEAT_OVERLAY}}"]
+
+[ext_resource type="Script" path="res://cheat/overlay/cheat_overlay.gd" id="1_overlay_script"]
+
+[node name="CheatOverlay" type="CanvasLayer"]
+layer = 100
+script = ExtResource("1_overlay_script")
+
+[node name="Panel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 0
+anchor_bottom = 0.0
+offset_left = 0.0
+offset_top = 300.0
+offset_right = 400.0
+offset_bottom = 750.0
+size_flags_horizontal = 3
+size_flags_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
+layout_mode = 1
+anchors_preset = 15
+offset_right = 0.0
+offset_bottom = 0.0
+theme_override_constants/separation = 8
+
+[node name="TopBar" type="HBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Panel/VBoxContainer/TopBar"]
+layout_mode = 2
+text = "Developer Tools"
+theme_override_font_sizes/font_size = 16
+
+[node name="Spacer" type="Control" parent="Panel/VBoxContainer/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="CloseBtn" type="Button" parent="Panel/VBoxContainer/TopBar"]
+layout_mode = 2
+text = "✕"
+flat = true
+
+[node name="ReloadBtn" type="Button" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "🔄 重载当前场景"
+size_flags_horizontal = 3
+
+[node name="SceneLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "场景跳转:"
+
+[node name="SceneList" type="ScrollContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SceneListVBox" type="VBoxContainer" parent="Panel/VBoxContainer/SceneList"]
+layout_mode = 2

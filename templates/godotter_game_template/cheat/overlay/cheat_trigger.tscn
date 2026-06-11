@@ -1,0 +1,19 @@
+[gd_scene load_steps=2 format=3 uid="{{UID_CHEAT_TRIGGER}}"]
+
+[ext_resource type="Script" path="res://cheat/overlay/cheat_trigger.gd" id="1_trigger_script"]
+
+[node name="CheatTrigger" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 44.0
+offset_bottom = 44.0
+mouse_filter = 2
+script = ExtResource("1_trigger_script")
+
+[node name="Button" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = 15
+offset_right = 0.0
+offset_bottom = 0.0
+text = "🔧"
+flat = true
