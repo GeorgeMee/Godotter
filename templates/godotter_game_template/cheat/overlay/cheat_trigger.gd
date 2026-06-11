@@ -4,8 +4,9 @@ extends Control
 
 signal pressed
 
-var _dragging := false
-var _drag_start := Vector2.ZERO
+var _is_dragging := false
+var _is_mouse_drag := false
+var _drag_start_pos := Vector2.ZERO
 var _drag_offset := Vector2.ZERO
 var _tap_threshold := 10.0
 
@@ -13,41 +14,54 @@ var _tap_threshold := 10.0
 func _ready() -> void:
 	position = get_viewport().get_visible_rect().size - Vector2(60, 140)
 	modulate.a = 0.5
+	set_process(false)
+
+
+func _process(_delta: float) -> void:
+	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		set_process(false)
+		_is_dragging = false
+		_is_mouse_drag = false
+		modulate.a = 0.5
+		return
+
+	var gmp := get_global_mouse_position()
+	if not _is_dragging:
+		_is_dragging = gmp.distance_to(_drag_start_pos) > _tap_threshold
+	if _is_dragging:
+		var parent_layer := get_parent()
+		var parent_pos := parent_layer.global_position if parent_layer else Vector2.ZERO
+		position = gmp - _drag_offset - parent_pos
 
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
-				_drag_start = position
+				_is_dragging = false
+				_is_mouse_drag = true
+				_drag_start_pos = get_global_mouse_position()
 				_drag_offset = event.position
 				modulate.a = 0.9
-			else:
-				modulate.a = 0.5
-				if not _dragging:
-					pressed.emit()
-				_dragging = false
-
-	if event is InputEventMouseMotion:
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			if not _dragging:
-				_dragging = position.distance_to(_drag_start) > _tap_threshold
-			if _dragging:
-				position = get_global_mouse_position() - _drag_offset
+				set_process(true)
+			elif not _is_dragging and _is_mouse_drag:
+				pressed.emit()
+				set_process(false)
 
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			_drag_start = position
+			_is_dragging = false
+			_drag_start_pos = get_global_mouse_position()
 			_drag_offset = event.position
 			modulate.a = 0.9
-		else:
+		elif not _is_dragging:
+			pressed.emit()
 			modulate.a = 0.5
-			if not _dragging:
-				pressed.emit()
-			_dragging = false
 
 	if event is InputEventScreenDrag:
-		if not _dragging:
-			_dragging = position.distance_to(_drag_start) > _tap_threshold
-		if _dragging:
-			position = event.position - _drag_offset + _drag_start
+		if not _is_dragging:
+			_is_dragging = (event.position - _drag_offset).length() > _tap_threshold
+		if _is_dragging:
+			var parent_layer := get_parent()
+			var parent_pos := parent_layer.global_position if parent_layer else Vector2.ZERO
+			position = event.position - _drag_offset - parent_pos + _drag_start_pos
