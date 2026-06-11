@@ -35,7 +35,7 @@ func _toggle_overlay() -> void:
 	_overlay.visible = not _overlay.visible
 
 
-func _on_scene_changed(_current: Node) -> void:
+func _on_scene_changed() -> void:
 	# Keep cheat nodes on top of the new scene
 	if _trigger_layer:
 		_trigger_layer.move_to_front()
