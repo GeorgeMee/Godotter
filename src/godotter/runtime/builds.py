@@ -106,6 +106,31 @@ def default_export_output(workspace_root: Path, build_id: str, preset: str) -> P
     return out_dir / f"{slug}.pck"
 
 
+def _patch_web_export_html(path: Path) -> None:
+    try:
+        html = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+
+    # Add viewport-fit=cover to viewport meta tag
+    html = html.replace(
+        '<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">',
+        '<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, viewport-fit=cover">',
+    )
+
+    # Override body CSS to fill entire viewport (no safe-area gaps on notched devices)
+    if "viewport-fit=cover" not in html:
+        return
+    old_body = "body {\n\tcolor: white;\n\tbackground-color: black;\n\toverflow: hidden;\n\ttouch-action: none;\n}"
+    new_body = "body {\n\tcolor: white;\n\tbackground-color: black;\n\toverflow: hidden;\n\ttouch-action: none;\n\twidth: 100vw;\n\theight: 100vh;\n}"
+    html = html.replace(old_body, new_body)
+
+    try:
+        path.write_text(html, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def run_export_build(
     *,
     godot_path: str,
@@ -158,6 +183,11 @@ def run_export_build(
         stderr = _decode(exc.stderr)
     duration_ms = int((time.perf_counter() - start) * 1000)
     status = "passed" if exit_code == 0 and not timed_out else "failed"
+
+    # Post-process Web export index.html for safe-area coverage
+    if status == "passed" and output_path.suffix == ".html" and output_path.exists():
+        _patch_web_export_html(output_path)
+
     report = BuildReport(
         build_id=build_id,
         created_at=datetime.now().isoformat(timespec="seconds"),
