@@ -82,7 +82,17 @@ Template provides `compact_board.tscn` — D-pad (left) + 4 face buttons ABXY (r
 | Controller | 60 | `ui/controllers/` | Virtual gamepad boards |
 | Game UI | 50 | `ui/views/` | Pause menu, game over, dialogs |
 | HUD | 10 | `ui/views/` | HP, score, minimap |
+| Game UI | 50 | `ui/views/` | Pause menu, game over, dialogs |
+| HUD | 10 | `ui/views/` | HP, score, minimap |
 | Game World | 0 | `game/` | Characters, effects, level geometry |
+
+## Level UI Convention
+
+- Each level must have a `UI` node (type=Control, group="ui") as a direct child of the level root
+- Level-specific UI is stored as widgets under `ui/widgets/`
+- `main_level.tscn` loads `main_widget.tscn` as child of the UI node
+- `game_level.tscn` loads `game_widget.tscn` as child of the UI node
+- Widgets are self-contained prefabs with their own scripts — levels do not need `.gd` files
 
 - cheat/ UI stays inside `cheat/` directory, never in `ui/`
 - ui/ is for player-facing game UI only
