@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3 uid="{{UID_MAIN_SCENE}}"]
+[gd_scene load_steps=5 format=3 uid="{{UID_MAIN_SCENE}}"]
 
 [ext_resource type="Script" path="res://game/core/events/event_bus.gd" id="1_event_bus"]
 [ext_resource type="Script" path="res://game/core/bootstrap/managers.gd" id="2_managers"]
 [ext_resource type="Script" path="res://game/core/input/input_mapper.gd" id="3_input_mapper"]
+[ext_resource type="PackedScene" path="res://ui/widgets/main_widget.tscn" id="4_main_widget"]
 
 [node name="MainLevel" type="Control"]
 layout_mode = 3
@@ -20,3 +21,5 @@ script = ExtResource("3_input_mapper")
 [node name="UI" type="Control" parent="." groups=["ui"]]
 layout_mode = 3
 anchors_preset = 15
+
+[node name="MainWidget" parent="UI" instance=ExtResource("4_main_widget")]
