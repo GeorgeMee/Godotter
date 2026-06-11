@@ -119,4 +119,3 @@ func _ready():
 
 - Input system: `Docs/Input.md`
 - Cheat tools: `cheat/README.md`
-- Template event flow example: `game/features/item_pickup/` + `game/systems/inventory/` + `tests/features/item_pickup/`
