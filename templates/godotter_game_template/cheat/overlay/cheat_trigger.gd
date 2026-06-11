@@ -22,18 +22,36 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
-				_dragging = true
-				_drag_start = position
-				_drag_offset = get_global_mouse_position() - position
-				modulate.a = 0.9
+				_start_drag(event.position)
 			else:
-				_dragging = false
-				if position.distance_to(_drag_start) < _tap_threshold:
+				_end_drag()
+				if not _dragging and position.distance_to(_drag_start) < _tap_threshold:
 					pressed.emit()
-				modulate.a = 0.5
 
 	if event is InputEventMouseMotion and _dragging:
 		position = get_global_mouse_position() - _drag_offset
+
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_start_drag(event.position)
+		else:
+			_end_drag()
+			if not _dragging and position.distance_to(_drag_start) < _tap_threshold:
+				pressed.emit()
+
+	if event is InputEventScreenDrag and _dragging:
+		position = event.position - _drag_offset + _drag_start
+
+
+func _start_drag(at: Vector2) -> void:
+	_dragging = false
+	_drag_start = position
+	_drag_offset = at
+	modulate.a = 0.9
+
+
+func _end_drag() -> void:
+	modulate.a = 0.5
 
 
 func _exit_tree() -> void:
