@@ -14,7 +14,6 @@ func _ready() -> void:
 			return
 	await get_tree().process_frame
 	_spawn()
-	get_tree().scene_changed.connect(_on_scene_changed)
 
 
 func _spawn() -> void:
@@ -33,11 +32,3 @@ func _spawn() -> void:
 
 func _toggle_overlay() -> void:
 	_overlay.visible = not _overlay.visible
-
-
-func _on_scene_changed() -> void:
-	# Keep cheat nodes on top of the new scene
-	if _trigger_layer:
-		_trigger_layer.move_to_front()
-	if _overlay:
-		_overlay.move_to_front()
