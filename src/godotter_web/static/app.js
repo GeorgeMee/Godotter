@@ -1506,6 +1506,16 @@ document.getElementById("tree-root").addEventListener("click", () => loadProject
 document.getElementById("play-build-and-run").addEventListener("click", buildAndRunWeb);
 document.getElementById("play-stop").addEventListener("click", stopPlay);
 document.getElementById("play-refresh").addEventListener("click", loadPlayStatus);
+document.getElementById("play-fullscreen").addEventListener("click", () => {
+  const frame = document.getElementById("play-frame");
+  if (frame.requestFullscreen) {
+    frame.requestFullscreen();
+  } else if (frame.webkitRequestFullscreen) {
+    frame.webkitRequestFullscreen();
+  } else if (frame.msRequestFullscreen) {
+    frame.msRequestFullscreen();
+  }
+});
 
 document.getElementById("show-file-size").addEventListener("change", (e) => {
   for (const el of document.querySelectorAll(".file-size")) {

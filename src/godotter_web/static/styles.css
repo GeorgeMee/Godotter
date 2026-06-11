@@ -1897,8 +1897,7 @@ button:hover,
 
 .play-frame-wrap {
   width: 100%;
-  aspect-ratio: 9 / 16;
-  max-height: 70vh;
+  height: 60vh;
   overflow: hidden;
   position: relative;
 }
