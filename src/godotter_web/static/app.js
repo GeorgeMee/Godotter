@@ -1421,6 +1421,16 @@ document.getElementById("build-doctor").addEventListener("click", runBuildDoctor
 document.getElementById("build-refresh").addEventListener("click", loadBuilds);
 
 let _playBuildId = null;
+let _playOrientation = "landscape";
+
+function setPlayOrientation(mode) {
+  _playOrientation = mode;
+  const wrap = document.getElementById("play-frame-wrap");
+  const btn = document.getElementById("play-orientation");
+  wrap.classList.toggle("portrait", mode === "portrait");
+  wrap.classList.toggle("landscape", mode === "landscape");
+  btn.textContent = mode === "portrait" ? "竖屏" : "横屏";
+}
 
 async function buildAndRunWeb() {
   const msg = document.getElementById("play-message");
@@ -1443,6 +1453,7 @@ async function buildAndRunWeb() {
       return;
     }
     _playBuildId = result.build.build_id;
+    setPlayOrientation(_playOrientation);
     const previewUrl = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(_playBuildId)}/preview/index.html`;
     frame.src = previewUrl;
     msg.textContent = "";
@@ -1477,6 +1488,7 @@ async function loadPlayStatus() {
     const webBuild = builds.find(b => b.preset && b.preset.toLowerCase().includes("web") && b.status === "passed");
     if (webBuild) {
       _playBuildId = webBuild.build_id;
+      setPlayOrientation(_playOrientation);
       frame.src = `/api/projects/${encodeURIComponent(currentProject)}/builds/${encodeURIComponent(_playBuildId)}/preview/index.html`;
       msg.textContent = "";
       status.textContent = "运行中";
@@ -1506,6 +1518,9 @@ document.getElementById("tree-root").addEventListener("click", () => loadProject
 document.getElementById("play-build-and-run").addEventListener("click", buildAndRunWeb);
 document.getElementById("play-stop").addEventListener("click", stopPlay);
 document.getElementById("play-refresh").addEventListener("click", loadPlayStatus);
+document.getElementById("play-orientation").addEventListener("click", () => {
+  setPlayOrientation(_playOrientation === "landscape" ? "portrait" : "landscape");
+});
 document.getElementById("play-fullscreen").addEventListener("click", () => {
   const frame = document.getElementById("play-frame");
   if (frame.requestFullscreen) {
