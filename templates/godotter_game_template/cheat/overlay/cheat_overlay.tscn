@@ -28,10 +28,20 @@ theme_override_constants/separation = 8
 [node name="TopBar" type="HBoxContainer" parent="Panel/VBoxContainer"]
 layout_mode = 2
 
-[node name="Title" type="Label" parent="Panel/VBoxContainer/TopBar"]
+[node name="ReloadBtn" type="Button" parent="Panel/VBoxContainer/TopBar"]
 layout_mode = 2
-text = "Developer Tools"
-theme_override_font_sizes/font_size = 16
+text = "🔄"
+flat = true
+
+[node name="NavJumpBtn" type="Button" parent="Panel/VBoxContainer/TopBar"]
+layout_mode = 2
+text = "Jump"
+flat = true
+
+[node name="NavInspectBtn" type="Button" parent="Panel/VBoxContainer/TopBar"]
+layout_mode = 2
+text = "Inspect"
+flat = true
 
 [node name="Spacer" type="Control" parent="Panel/VBoxContainer/TopBar"]
 layout_mode = 2
@@ -42,18 +52,32 @@ layout_mode = 2
 text = "✕"
 flat = true
 
-[node name="ReloadBtn" type="Button" parent="Panel/VBoxContainer"]
-layout_mode = 2
-text = "🔄 重载当前场景"
-size_flags_horizontal = 3
-
-[node name="SceneLabel" type="Label" parent="Panel/VBoxContainer"]
-layout_mode = 2
-text = "场景跳转:"
-
-[node name="SceneList" type="ScrollContainer" parent="Panel/VBoxContainer"]
+[node name="ContentStack" type="Control" parent="Panel/VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="SceneListVBox" type="VBoxContainer" parent="Panel/VBoxContainer/SceneList"]
+[node name="JumpContent" type="VBoxContainer" parent="Panel/VBoxContainer/ContentStack"]
+layout_mode = 1
+anchors_preset = 15
+offset_right = 0.0
+offset_bottom = 0.0
+
+[node name="SceneLabel" type="Label" parent="Panel/VBoxContainer/ContentStack/JumpContent"]
+layout_mode = 2
+text = "场景跳转:"
+
+[node name="SceneList" type="ScrollContainer" parent="Panel/VBoxContainer/ContentStack/JumpContent"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SceneListVBox" type="VBoxContainer" parent="Panel/VBoxContainer/ContentStack/JumpContent/SceneList"]
+layout_mode = 2
+
+[node name="InspectContent" type="ScrollContainer" parent="Panel/VBoxContainer/ContentStack"]
+layout_mode = 1
+anchors_preset = 15
+offset_right = 0.0
+offset_bottom = 0.0
+
+[node name="InspectVBox" type="VBoxContainer" parent="Panel/VBoxContainer/ContentStack/InspectContent"]
 layout_mode = 2
