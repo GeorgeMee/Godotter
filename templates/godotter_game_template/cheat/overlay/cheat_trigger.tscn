@@ -17,3 +17,4 @@ offset_right = 0.0
 offset_bottom = 0.0
 text = "🔧"
 flat = true
+mouse_filter = 2
