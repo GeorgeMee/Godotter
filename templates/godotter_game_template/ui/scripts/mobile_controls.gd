@@ -17,6 +17,7 @@ func _ready() -> void:
 	_bind_button(^"Actions/Primary", InputActionsScript.PRIMARY)
 	_bind_button(^"Actions/Secondary", InputActionsScript.SECONDARY)
 	_bind_button(^"Actions/Tertiary", InputActionsScript.TERTIARY)
+	_bind_button(^"Actions/Quaternary", InputActionsScript.QUATERNARY)
 	_bind_button(^"Pause", InputActionsScript.PAUSE)
 
 

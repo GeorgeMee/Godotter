@@ -9,6 +9,7 @@ const DOWN: StringName = &"down"
 const PRIMARY: StringName = &"primary"
 const SECONDARY: StringName = &"secondary"
 const TERTIARY: StringName = &"tertiary"
+const QUATERNARY: StringName = &"quaternary"
 const CONFIRM: StringName = &"confirm"
 const CANCEL: StringName = &"cancel"
 const PAUSE: StringName = &"pause"
@@ -21,6 +22,7 @@ const BASE_ACTIONS: Array[StringName] = [
 	PRIMARY,
 	SECONDARY,
 	TERTIARY,
+	QUATERNARY,
 	CONFIRM,
 	CANCEL,
 	PAUSE,
@@ -41,13 +43,12 @@ static func ensure_default_actions() -> void:
 	_add_key(DOWN, KEY_S)
 	_add_key(DOWN, KEY_DOWN)
 	_add_key(PRIMARY, KEY_SPACE)
-	_add_key(PRIMARY, KEY_ENTER)
 	_add_key(SECONDARY, KEY_SHIFT)
+	_add_key(TERTIARY, KEY_Q)
 	_add_key(TERTIARY, KEY_CTRL)
+	_add_key(QUATERNARY, KEY_E)
 	_add_key(CONFIRM, KEY_ENTER)
-	_add_key(CONFIRM, KEY_SPACE)
 	_add_key(CANCEL, KEY_ESCAPE)
-	_add_key(PAUSE, KEY_ESCAPE)
 	_add_key(PAUSE, KEY_P)
 
 

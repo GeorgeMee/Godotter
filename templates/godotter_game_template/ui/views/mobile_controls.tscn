@@ -72,9 +72,9 @@ grow_vertical = 0
 [node name="Primary" type="Button" parent="Actions"]
 layout_mode = 1
 offset_left = 96.0
-offset_top = 48.0
+offset_top = 80.0
 offset_right = 160.0
-offset_bottom = 112.0
+offset_bottom = 144.0
 text = "A"
 
 [node name="Secondary" type="Button" parent="Actions"]
@@ -87,11 +87,19 @@ text = "B"
 
 [node name="Tertiary" type="Button" parent="Actions"]
 layout_mode = 1
-offset_left = 56.0
+offset_left = 96.0
 offset_top = 8.0
-offset_right = 120.0
+offset_right = 160.0
 offset_bottom = 72.0
 text = "C"
+
+[node name="Quaternary" type="Button" parent="Actions"]
+layout_mode = 1
+offset_left = 24.0
+offset_top = 8.0
+offset_right = 88.0
+offset_bottom = 72.0
+text = "D"
 
 [node name="Pause" type="Button" parent="."]
 layout_mode = 1
