@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     chat_model: str | None = Field(default=None, alias='GODOTTER_CHAT_MODEL')
     plan_model: str | None = Field(default=None, alias='GODOTTER_PLAN_MODEL')
     act_model: str | None = Field(default=None, alias='GODOTTER_ACT_MODEL')
+    design_brain: str | None = Field(default=None, alias='GODOTTER_DESIGN_BRAIN')
+    design_model: str | None = Field(default=None, alias='GODOTTER_DESIGN_MODEL')
     projects_root: str = Field(default='./tmp', alias='GODOTTER_PROJECTS_ROOT')
 
     @property
@@ -68,6 +70,11 @@ class Settings(BaseSettings):
     def resolved_act_brain(self) -> str:
         act = getattr(self, 'act_brain', None)
         return (act or self.default_brain).strip().lower()
+
+    @property
+    def resolved_design_brain(self) -> str:
+        design = getattr(self, 'design_brain', None)
+        return (design or self.default_brain).strip().lower()
 
     @property
     def resolved_memory_path(self) -> Path:

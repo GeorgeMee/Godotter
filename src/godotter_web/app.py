@@ -1877,6 +1877,101 @@ def _secondary_page(
           display: none !important;
         }}
       }}
+
+      .design-tabs {{
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }}
+      .design-tab {{
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
+      }}
+      .design-tab:hover {{
+        border-color: var(--line-strong);
+        color: var(--text);
+      }}
+      .design-tab.active {{
+        border-color: var(--line-strong);
+        color: #d8e6ff;
+        background: var(--accent-soft);
+      }}
+      .design-card {{
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 8px;
+        background: rgba(12, 16, 23, 0.76);
+      }}
+      .design-card-head {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }}
+      .design-card-head code {{
+        font-size: 0.78em;
+      }}
+      .design-card-desc {{
+        margin: 6px 0;
+        font-size: 0.88em;
+        color: var(--text);
+      }}
+      .design-card-meta {{
+        margin-top: 6px;
+        font-size: 0.8em;
+        color: var(--muted);
+      }}
+      .design-tags {{
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }}
+      .tag {{
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.72em;
+        font-family: Consolas, monospace;
+      }}
+      .tag-pub {{
+        background: var(--accent-soft);
+        color: var(--accent);
+      }}
+      .tag-sub {{
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--muted);
+      }}
+      .design-event-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9em;
+      }}
+      .design-event-table th,
+      .design-event-table td {{
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        text-align: left;
+      }}
+      .design-event-table th {{
+        background: var(--panel-strong);
+        font-weight: 700;
+      }}
+      .design-section {{
+        display: grid;
+        gap: 0;
+      }}
     </style>
   </head>
   <body>
@@ -1886,6 +1981,7 @@ def _secondary_page(
         <span class="brand">Godotter</span>
         <div class="gtabs-desktop">
           <a class="tab{' active' if current == 'Projects' else ''}" href="/projects">Projects</a>
+          <a class="tab{' active' if current == 'Design' else ''}" href="/design">Design</a>
           <a class="tab{' active' if current == 'Workspace' else ''}" href="/">Workspace</a>
           <a class="tab{' active' if current == 'Settings' else ''}" href="/settings">Settings</a>
         </div>
@@ -1899,6 +1995,7 @@ def _secondary_page(
           <nav class="nav-sidebar-links">
             <a href="/"{' class="active"' if current == 'Workspace' else ''}>Workspace</a>
             <a href="/projects"{' class="active"' if current == 'Projects' else ''}>Projects</a>
+            <a href="/design"{' class="active"' if current == 'Design' else ''}>Design</a>
             <a href="/settings"{' class="active"' if current == 'Settings' else ''}>Settings</a>
           </nav>
         </div>
@@ -2151,9 +2248,11 @@ def config_state() -> dict[str, object]:
             'chat_brain': settings.resolved_chat_brain,
             'plan_brain': settings.resolved_plan_brain,
             'act_brain': settings.resolved_act_brain,
+            'design_brain': settings.resolved_design_brain,
             'chat_model': settings.chat_model or '',
             'plan_model': settings.plan_model or '',
             'act_model': settings.act_model or '',
+            'design_model': settings.design_model or '',
             'provider_models': provider_models,
         },
     }
@@ -2762,7 +2861,7 @@ def project_session_run_events(
 def projects_page(request: Request) -> str:
     _require_token_if_configured(request)
     body_html = """
-       <section class="panel">
+      <section class="panel">
         <div class="panel-head">
           <p class="eyebrow">Registry</p>
           <h2>Projects</h2>
@@ -2811,7 +2910,7 @@ def projects_page(request: Request) -> str:
       }
 
       function itemHtml(item) {
-        const title = item.goal || item.name;
+        const title = item.name || item.goal;
         const meta = [
           item.created_at ? `created=${item.created_at}` : '',
           item.tasks !== undefined ? `tasks=${item.tasks}` : '',
@@ -2869,13 +2968,12 @@ def projects_page(request: Request) -> str:
           const created = await fetch('/api/projects', {
             method: 'POST',
             headers: {'content-type': 'application/json'},
-            body: JSON.stringify({name, no_git: true, set_default: true}),
+            body: JSON.stringify({name, workspace_root: ''}),
           });
-          if (!created.ok) throw new Error(await created.text());
-          localStorage.setItem('godotter:selectedProject', name);
-          status.textContent = 'Created.';
+          if (!created.ok) throw new Error((await created.json()).detail || 'create failed');
+          status.textContent = 'Created!';
           nameInput.value = '';
-          await init();
+          init();
         } catch (error) {
           status.textContent = `Create failed: ${error.message}`;
         }
@@ -2913,6 +3011,579 @@ def projects_page(request: Request) -> str:
         body_html=body_html,
         script_html=script_html,
     )
+
+
+@app.get('/design', response_class=HTMLResponse)
+def design_page(request: Request) -> str:
+    _require_token_if_configured(request)
+    body_html = """
+      <section class="panel" style="max-width:900px;margin:0 auto;">
+        <div class="panel-head">
+          <p class="eyebrow">Design</p>
+          <h2>玩法设计助手</h2>
+          <p class="subtle">与 AI 讨论游戏玩法、划分 System/Feature/GameMode、完善模板规范。无需绑定项目。</p>
+        </div>
+        <div class="session-bar" id="design-session-bar">
+          <select id="design-session-select" aria-label="历史会话">
+            <option value="">选择历史会话...</option>
+          </select>
+          <button type="button" class="secondary" id="design-load-session">加载</button>
+          <span class="new-chat-wrap"><button type="button" id="design-new-chat">新对话</button></span>
+        </div>
+        <div id="design-tabs" class="design-tabs" style="display:none;margin-bottom:10px;">
+          <button type="button" class="design-tab active" data-section="systems">Systems <span class="muted" id="design-count-systems">0</span></button>
+          <button type="button" class="design-tab" data-section="features">Features <span class="muted" id="design-count-features">0</span></button>
+          <button type="button" class="design-tab" data-section="gamemodes">GameModes <span class="muted" id="design-count-gamemodes">0</span></button>
+          <button type="button" class="design-tab" data-section="events">Events <span class="muted" id="design-count-events">0</span></button>
+        </div>
+        <div id="design-panel" class="design-panel" style="border:1px solid var(--line);border-radius:14px;min-height:400px;max-height:60vh;overflow-y:auto;padding:14px;background:rgba(10,14,20,0.6);margin-bottom:12px;">
+          <div class="bubble assistant" style="margin-bottom:10px;">
+            <strong style="display:block;margin-bottom:4px;">Design</strong>
+            <p class="muted" style="margin:0;">你好！我是玩法设计助手。描述你想设计的游戏玩法，我会拆解成 Systems、Features、GameModes 的结构化 JSON。</p>
+          </div>
+        </div>
+        <form class="design-form" id="design-form" style="display:flex;gap:8px;">
+          <textarea id="design-prompt" rows="2" placeholder="例如：玩家在地牢里探索，遇到怪物和宝箱，收集材料升级魔杖打怪..." style="flex:1;min-height:44px;"></textarea>
+          <button type="submit" class="send-btn" style="flex-shrink:0;min-height:44px;min-width:44px;">➤</button>
+        </form>
+        <p class="muted" id="design-status" style="margin-top:8px;"></p>
+      </section>
+    """
+    script_html = """<script>
+      const panel = document.getElementById('design-panel');
+      const form = document.getElementById('design-form');
+      const prompt = document.getElementById('design-prompt');
+      const status = document.getElementById('design-status');
+      const sessionSelect = document.getElementById('design-session-select');
+      const loadBtn = document.getElementById('design-load-session');
+      const newBtn = document.getElementById('design-new-chat');
+      const tabs = document.getElementById('design-tabs');
+      const STORAGE_KEY = 'godotter:designSession';
+      let currentDesignSession = null;
+      let _designController = null;
+      let _lastDesignJson = null;
+
+      window.addEventListener('beforeunload', () => {
+        if (_designController) _designController.abort();
+      });
+
+      async function fetchJson(path, options = {}) {
+        const response = await fetch(path, options);
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      function esc(v) { return String(v ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+
+      function extractJSON(text) {
+        const m = text.match(/```json\\n?([\\s\\S]*?)\\n?```/);
+        if (m) {
+          try { return JSON.parse(m[1]); } catch (_) {}
+        }
+        try { return JSON.parse(text); } catch (_) {}
+        return null;
+      }
+
+      function hasDesignKeys(obj) {
+        return obj && (Array.isArray(obj.systems) || Array.isArray(obj.features) || Array.isArray(obj.gamemodes));
+      }
+
+      function renderDesignCards(container, items, section) {
+        container.innerHTML = '';
+        if (!items || !items.length) {
+          container.innerHTML = '<p class="muted" style="text-align:center;padding:20px;">无</p>';
+          return;
+        }
+        for (const item of items) {
+          const card = document.createElement('div');
+          card.className = 'design-card';
+          let html = '<div class="design-card-head">';
+          html += '<strong>' + esc(item.name || '') + '</strong>';
+          html += ' <code class="muted">' + esc(item.directory || '') + '</code>';
+          html += '</div>';
+          if (item.description) html += '<p class="design-card-desc">' + esc(item.description) + '</p>';
+          if (section === 'systems') {
+            if (item.publishes && item.publishes.length) html += '<div class="design-tags">' + item.publishes.map(e => '<span class="tag tag-pub">' + esc(e) + '</span>').join('') + '</div>';
+            if (item.subscribes && item.subscribes.length) html += '<div class="design-tags" style="margin-top:4px;">' + item.subscribes.map(e => '<span class="tag tag-sub">' + esc(e) + '</span>').join('') + '</div>';
+            if (item.export_vars && item.export_vars.length) html += '<div class="design-card-meta">Export: ' + item.export_vars.map(v => esc(v.name) + ' (' + esc(v.type || '') + ')').join(', ') + '</div>';
+          } else if (section === 'features') {
+            if (item.uses_systems && item.uses_systems.length) html += '<div class="design-card-meta">Uses: ' + item.uses_systems.map(s => esc(s)).join(', ') + '</div>';
+            if (item.subscribes && item.subscribes.length) html += '<div class="design-tags">' + item.subscribes.map(e => '<span class="tag tag-sub">' + esc(e) + '</span>').join('') + '</div>';
+          } else if (section === 'gamemodes') {
+            if (item.systems && item.systems.length) html += '<div class="design-card-meta">Systems: ' + item.systems.map(s => esc(s)).join(', ') + '</div>';
+            if (item.features && item.features.length) html += '<div class="design-card-meta">Features: ' + item.features.map(f => esc(f)).join(', ') + '</div>';
+            if (item.export_vars && item.export_vars.length) html += '<div class="design-card-meta">Export: ' + item.export_vars.map(v => esc(v.name) + ' (' + esc(v.type || '') + ')').join(', ') + '</div>';
+          }
+          card.innerHTML = html;
+          container.appendChild(card);
+        }
+      }
+
+      function renderDesign(json) {
+        _lastDesignJson = json;
+        tabs.style.display = 'flex';
+        document.getElementById('design-count-systems').textContent = (json.systems || []).length;
+        document.getElementById('design-count-features').textContent = (json.features || []).length;
+        document.getElementById('design-count-gamemodes').textContent = (json.gamemodes || []).length;
+        document.getElementById('design-count-events').textContent = (json.event_types || []).length;
+        const activeSection = tabs.querySelector('.design-tab.active').dataset.section;
+        const container = document.createElement('div');
+        container.className = 'design-section';
+        if (activeSection === 'systems') renderDesignCards(container, json.systems, 'systems');
+        else if (activeSection === 'features') renderDesignCards(container, json.features, 'features');
+        else if (activeSection === 'gamemodes') renderDesignCards(container, json.gamemodes, 'gamemodes');
+        else if (activeSection === 'events') {
+          const events = json.event_types || [];
+          if (!events.length) { container.innerHTML = '<p class="muted" style="text-align:center;padding:20px;">无</p>'; }
+          else {
+            const table = document.createElement('table');
+            table.className = 'design-event-table';
+            table.innerHTML = '<tr><th>Event</th><th>Description</th></tr>';
+            for (const ev of events) {
+              table.innerHTML += '<tr><td><code>' + esc(ev.name) + '</code></td><td>' + esc(ev.description || '') + '</td></tr>';
+            }
+            container.appendChild(table);
+          }
+        }
+        panel.innerHTML = '';
+        panel.appendChild(container);
+        // Add copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'secondary';
+        copyBtn.textContent = '复制 JSON';
+        copyBtn.style.cssText = 'margin-bottom:10px;font-size:0.8em;padding:4px 10px;';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(JSON.stringify(json, null, 2)).then(() => {
+            copyBtn.textContent = '已复制';
+            setTimeout(() => { copyBtn.textContent = '复制 JSON'; }, 1500);
+          }).catch(() => {
+            copyBtn.textContent = '失败';
+          });
+        });
+        panel.insertBefore(copyBtn, panel.firstChild);
+      }
+
+      function handleReply(text) {
+        const json = extractJSON(text);
+        if (json && hasDesignKeys(json)) {
+          renderDesign(json);
+        } else {
+          const div = document.createElement('div');
+          div.className = 'bubble assistant';
+          div.style.marginBottom = '10px';
+          const strong = document.createElement('strong');
+          strong.style.display = 'block';
+          strong.style.marginBottom = '4px';
+          strong.textContent = 'Design';
+          const p = document.createElement('p');
+          p.style.margin = '0';
+          p.style.whiteSpace = 'pre-wrap';
+          p.textContent = text;
+          div.append(strong, p);
+          panel.innerHTML = '';
+          panel.appendChild(div);
+          tabs.style.display = 'none';
+        }
+      }
+
+      function renderMessages(messages) {
+        panel.innerHTML = '';
+        if (!messages.length) {
+          const div = document.createElement('div');
+          div.className = 'bubble assistant';
+          div.style.marginBottom = '10px';
+          const strong = document.createElement('strong');
+          strong.style.display = 'block';
+          strong.style.marginBottom = '4px';
+          strong.textContent = 'Design';
+          const p = document.createElement('p');
+          p.style.margin = '0';
+          p.className = 'muted';
+          p.textContent = '你好！我是玩法设计助手。描述你想设计的游戏玩法，我会拆解成 Systems、Features、GameModes 的结构化 JSON。';
+          div.append(strong, p);
+          panel.appendChild(div);
+          tabs.style.display = 'none';
+          return;
+        }
+        const last = messages[messages.length - 1];
+        if (last.role === 'assistant') handleReply(last.content);
+      }
+
+      for (const tab of tabs.querySelectorAll('.design-tab')) {
+        tab.addEventListener('click', () => {
+          for (const t of tabs.querySelectorAll('.design-tab')) t.classList.remove('active');
+          tab.classList.add('active');
+          if (_lastDesignJson) renderDesign(_lastDesignJson);
+        });
+      }
+
+      async function loadDesignSessions() {
+        try {
+          const result = await fetchJson('/api/design/sessions');
+          const sessions = result.sessions || [];
+          sessionSelect.innerHTML = '<option value="">选择历史会话...</option>';
+          for (const s of sessions) {
+            const opt = document.createElement('option');
+            opt.value = s.session_id;
+            opt.textContent = s.title || s.session_id;
+            if (currentDesignSession && s.session_id === currentDesignSession.session_id) opt.selected = true;
+            sessionSelect.appendChild(opt);
+          }
+        } catch (_) { sessionSelect.innerHTML = '<option value="">加载失败</option>'; }
+      }
+
+      async function loadDesignSession(sessionId) {
+        try {
+          const detail = await fetchJson('/api/design/sessions/' + encodeURIComponent(sessionId));
+          currentDesignSession = detail.session;
+          localStorage.setItem(STORAGE_KEY, sessionId);
+          renderMessages(detail.messages || []);
+          status.textContent = '当前：' + (currentDesignSession.title || 'Design chat');
+        } catch (error) { status.textContent = '加载失败：' + error.message; }
+      }
+
+      async function ensureDesignSession(initialTitle) {
+        if (currentDesignSession) return currentDesignSession;
+        const created = await fetchJson('/api/design/sessions', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({title: initialTitle.slice(0, 48)}),
+        });
+        currentDesignSession = created.session;
+        localStorage.setItem(STORAGE_KEY, created.session.session_id);
+        status.textContent = '当前：' + (currentDesignSession.title || 'Design chat');
+        await loadDesignSessions();
+        return currentDesignSession;
+      }
+
+      loadBtn.addEventListener('click', async () => {
+        const sid = sessionSelect.value;
+        if (!sid) return;
+        await loadDesignSession(sid);
+      });
+
+      newBtn.addEventListener('click', async () => {
+        if (_designController) _designController.abort();
+        currentDesignSession = null;
+        _lastDesignJson = null;
+        panel.innerHTML = '';
+        renderMessages([]);
+        status.textContent = '新对话';
+        localStorage.removeItem(STORAGE_KEY);
+        await loadDesignSessions();
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = prompt.value.trim();
+        if (!text) return;
+        prompt.value = '';
+        status.textContent = '思考中...';
+        try {
+          const session = await ensureDesignSession(text);
+          _designController = new AbortController();
+          const resp = await fetch('/api/design/sessions/' + encodeURIComponent(session.session_id) + '/chat', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify({message: text}),
+            signal: _designController.signal,
+          });
+          _designController = null;
+          if (!resp.ok) throw new Error(await resp.text());
+          const data = await resp.json();
+          currentDesignSession = data.session;
+          handleReply(data.reply);
+          status.textContent = '当前：' + (currentDesignSession.title || 'Design chat');
+          await loadDesignSessions();
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+          status.textContent = '失败';
+        }
+      });
+
+      async function initDesign() {
+        const savedId = localStorage.getItem(STORAGE_KEY);
+        await loadDesignSessions();
+        if (savedId) {
+          try {
+            const detail = await fetchJson('/api/design/sessions/' + encodeURIComponent(savedId));
+            currentDesignSession = detail.session;
+            renderMessages(detail.messages || []);
+            status.textContent = '当前：' + (currentDesignSession.title || 'Design chat');
+          } catch (_) {
+            localStorage.removeItem(STORAGE_KEY);
+            renderMessages([]);
+          }
+        }
+      }
+      initDesign();
+    </script>"""
+    return _secondary_page(
+        title='Design',
+        eyebrow='Tools',
+        summary='Discuss game design, split systems/features/gamemodes, refine template conventions.',
+        current='Design',
+        body_html=body_html,
+        script_html=script_html,
+    )
+
+DESIGN_SESSIONS_DIR = Path('config') / 'design_sessions'
+
+
+def _design_session_path(session_id: str) -> Path:
+    return DESIGN_SESSIONS_DIR / f'{session_id}.json'
+
+
+def _design_messages_path(session_id: str) -> Path:
+    return DESIGN_SESSIONS_DIR / session_id / 'messages.jsonl'
+
+
+def _create_design_session(*, title: str = '') -> dict[str, object]:
+    session_id = _new_id('ds')
+    now = _now_iso()
+    session = {
+        'session_id': session_id,
+        'created_at': now,
+        'updated_at': now,
+        'title': title.strip() or 'Design chat',
+    }
+    _write_json(_design_session_path(session_id), session)
+    msg_dir = _design_messages_path(session_id).parent
+    msg_dir.mkdir(parents=True, exist_ok=True)
+    _design_messages_path(session_id).write_text('', encoding='utf-8', newline='\n')
+    return session
+
+
+def _list_design_sessions() -> list[dict[str, object]]:
+    if not DESIGN_SESSIONS_DIR.exists():
+        return []
+    paths = sorted(DESIGN_SESSIONS_DIR.glob('ds_*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+    sessions = []
+    for path in paths:
+        try:
+            sessions.append(json.loads(path.read_text(encoding='utf-8')))
+        except Exception:
+            continue
+    return sessions
+
+
+def _load_design_session(session_id: str) -> dict[str, object]:
+    sid = _validate_id(session_id, prefix='ds')
+    path = _design_session_path(sid)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail='design_session_not_found')
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _read_design_messages(session_id: str) -> list[dict[str, object]]:
+    path = _design_messages_path(session_id)
+    if not path.exists():
+        return []
+    messages = []
+    for line in path.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        try:
+            messages.append(json.loads(line))
+        except Exception:
+            continue
+    return messages
+
+
+def _append_design_message(session_id: str, *, role: str, content: str) -> dict[str, object]:
+    session = _load_design_session(session_id)
+    content = content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail='message_content_required')
+    if role not in {'user', 'assistant'}:
+        raise HTTPException(status_code=400, detail='invalid_message_role')
+    message = {
+        'message_id': _new_id('msg'),
+        'created_at': _now_iso(),
+        'role': role,
+        'content': content,
+    }
+    path = _design_messages_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8', newline='\n') as f:
+        f.write(json.dumps(message, ensure_ascii=False) + '\n')
+    session['updated_at'] = message['created_at']
+    if session.get('title') == 'Design chat' and role == 'user':
+        session['title'] = content[:48]
+    _write_json(_design_session_path(session_id), session)
+    return message
+
+
+@app.get('/api/design/sessions')
+def design_sessions_list(request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    return {'ok': True, 'sessions': _list_design_sessions()}
+
+
+@app.post('/api/design/sessions')
+async def design_sessions_create(request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    title = str(payload.get('title', '')).strip()
+    session = _create_design_session(title=title)
+    return {'ok': True, 'session': session, 'messages': []}
+
+
+@app.get('/api/design/sessions/{session_id}')
+def design_sessions_get(session_id: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    session = _load_design_session(session_id)
+    return {
+        'ok': True,
+        'session': session,
+        'messages': _read_design_messages(session_id),
+    }
+
+
+def _build_design_system_prompt() -> str:
+    template_dir = Path(__file__).resolve().parents[2] / 'templates' / 'godotter_game_template'
+    conventions_path = template_dir / 'Docs' / 'Conventions.md'
+
+    conventions_text = ""
+    if conventions_path.exists():
+        conventions_text = conventions_path.read_text(encoding='utf-8')
+
+    schema_text = '''{
+  "name": "PacMan",
+  "systems": [
+    {
+      "name": "pacman",
+      "directory": "game/systems/pacman/",
+      "description": "Manages Pac-Man grid position, direction, movement tick, and alive/dead state.",
+      "publishes": ["PACMAN_MOVED", "PACMAN_DIED"],
+      "subscribes": ["PACMAN_DIRECTION_REQUESTED"],
+      "export_vars": [{"name": "move_speed", "type": "float", "default": "0.15"}]
+    }
+  ],
+  "features": [
+    {
+      "name": "eat_dot",
+      "directory": "game/features/pacman/eat_dot/",
+      "description": "Detects Pac-Man on a dot tile, removes the dot and adds score.",
+      "uses_systems": ["pacman"],
+      "subscribes": ["PACMAN_MOVED"]
+    }
+  ],
+  "gamemodes": [
+    {
+      "name": "pacman",
+      "directory": "game/gamemodes/pacman/",
+      "description": "Classic Pac-Man game loop with maze, dots, ghosts, power pellets, and lives.",
+      "systems": ["pacman", "maze", "ghost", "dot", "score"],
+      "features": ["eat_dot", "eat_power_pellet", "ghost_collision"],
+      "export_vars": [{"name": "level_data_path", "type": "String", "default": ""}]
+    }
+  ],
+  "event_types": [
+    {"name": "PACMAN_MOVED", "description": "Published by pacman_system after each grid move."},
+    {"name": "PACMAN_DIED", "description": "Published by pacman_system when lives reach zero."}
+  ]
+}'''
+
+    return f"""You are a game design assistant for the Godotter project.
+Your workspace is the Godotter game template at: {template_dir}
+
+## Before each response, use tools to:
+- Read Docs/Conventions.md at {template_dir}/Docs/Conventions.md for the full architectural rules
+- Use list_files to explore game/systems/ game/features/ game/gamemodes/ in the template
+
+## Your Job
+Decompose game ideas into Systems, Features, and GameModes per the conventions.
+
+## Output Format — STRICT
+
+When the user asks you to decompose a game idea, your response MUST be ONLY this:
+
+```json
+{schema_text}
+```
+
+RULES:
+- Your ENTIRE response must be a single ```json code block.
+- NO markdown sections, NO tables, NO bullet lists, NO explanations before or after.
+- If the user asks a clarifying question, output the JSON with your best guess. If you truly cannot decompose without more info, output ONE SHORT question in a single plain-text sentence — then wait.
+- NEVER write more than one sentence of plain text.
+
+NAMING RULES (from template conventions):
+- system name "pacman" → main file: game/systems/pacman/pacman_system.gd
+- feature name "eat_dot" → main file: game/features/pacman/eat_dot/eat_dot_feature.gd
+- gamemode name "pacman" → main file: game/gamemodes/pacman/pacman_mode.gd
+- Directory name is short (no suffix). Suffix is on the main file only.
+- The "name" field uses the short name (e.g., "pacman", not "pacman_system").
+- uses_systems arrays reference short names (e.g., "pacman", not "pacman_system").
+- uses_features arrays reference short names (e.g., "eat_dot", not "eat_dot_feature").
+
+# Current Template Conventions
+
+{conventions_text}"""
+
+
+@app.post('/api/design/sessions/{session_id}/chat')
+async def design_sessions_chat(session_id: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    session = _load_design_session(session_id)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail='invalid_json')
+
+    message = str(payload.get('message', '')).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail='message_required')
+
+    user_msg = _append_design_message(session_id, role='user', content=message)
+
+    settings = get_settings()
+    brain_name = settings.resolved_design_brain
+    template_dir = Path(__file__).resolve().parents[2] / 'templates' / 'godotter_game_template'
+
+    from godotter.tools.files import ReadFile, ListFiles
+    registry = ToolRegistry([ReadFile(), ListFiles()])
+    template_settings = settings.model_copy(update={'workspace_root': template_dir})
+    memory = Memory(template_settings.resolved_memory_path)
+    brain = create_brain(template_settings, brain_name, model_override=getattr(settings, 'design_model', None))
+
+    agent = Agent(
+        brain=brain,
+        settings=template_settings,
+        registry=registry,
+        memory=memory,
+        mode='act',
+        brain_name=brain_name,
+        project_summary=_build_design_system_prompt(),
+    )
+    agent.expose_tool_output = False
+    if hasattr(agent.brain, 'tool_choice'):
+        setattr(agent.brain, 'tool_choice', 'auto')
+
+    recent = _read_design_messages(session_id)
+    for msg in recent[-10:]:
+        agent.conversation.append({'role': msg['role'], 'content': msg['content']})
+    agent.conversation.insert(0, {'role': 'system', 'content': _build_design_system_prompt()})
+
+    try:
+        reply = agent._agentic_loop()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'design_agent_failed: {exc}')
+
+    assistant_msg = _append_design_message(session_id, role='assistant', content=reply)
+
+    return {
+        'ok': True,
+        'message': user_msg,
+        'reply': assistant_msg['content'],
+        'session': _load_design_session(session_id),
+    }
 
 
 @app.get('/settings', response_class=HTMLResponse)
@@ -3004,6 +3675,7 @@ def settings_page(request: Request) -> str:
               {key:'chat',label:'Chat',brain:cfg.chat_brain||cfg.default_brain||'stub',model:cfg.chat_model},
               {key:'plan',label:'Plan',brain:cfg.plan_brain||cfg.default_brain||'stub',model:cfg.plan_model},
               {key:'act',label:'Run',brain:cfg.act_brain||cfg.default_brain||'stub',model:cfg.act_model},
+              {key:'design',label:'Design',brain:cfg.design_brain||cfg.default_brain||'stub',model:cfg.design_model},
             ];
             table.innerHTML = tasks.map((t) => {
               const brain = t.brain||'stub';

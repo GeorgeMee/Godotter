@@ -136,6 +136,7 @@ test_app = typer.Typer(help='Create and manage Godotter test harnesses.')
 scaffold_app = typer.Typer(help='Generate convention-compliant project files.')
 export_app = typer.Typer(help='Build and list Godot export packages.')
 template_app = typer.Typer(help='Configure export template paths.')
+design_app = typer.Typer(help='Decompose game ideas into Systems, Features, GameModes per template conventions.')
 
 app.add_typer(provider_app, name='provider')
 provider_app.add_typer(provider_key_app, name='key')
@@ -148,6 +149,7 @@ app.add_typer(scene_app, name='scene')
 app.add_typer(scaffold_app, name='scaffold')
 app.add_typer(export_app, name='export')
 export_app.add_typer(template_app, name='template')
+app.add_typer(design_app, name='design')
 
 
 @app.callback()
@@ -2257,3 +2259,79 @@ def runtime_validate_paths_command(
         typer.echo(f'issue code={issue.code} message={issue.message}')
     if not report.ok:
         raise typer.Exit(1)
+
+
+@design_app.command('decompose', help='Decompose a game idea into systems, features, gamemodes per conventions.')
+def design_decompose_command(
+    description: str = typer.Argument(..., help='Natural language description of the game idea.'),
+    file: Path | None = typer.Option(None, '--file', '-f', help='Read description from a file instead of argument.'),
+    brain: str | None = typer.Option(None, '--brain', help='Override the default AI brain/provider.'),
+) -> None:
+    base_settings = get_settings()
+    settings = base_settings.model_copy(update={'workspace_root': Path.cwd()})
+    selected_brain = brain or settings.resolved_plan_brain
+
+    text = description
+    if file:
+        text = file.read_text(encoding='utf-8').strip()
+
+    if not text:
+        typer.echo('Error: description is empty.')
+        raise typer.Exit(1)
+
+    from godotter.tasks.planning import build_design_prompt, validate_design_json
+
+    prompt, constraints = build_design_prompt(text)
+
+    agent = Agent(
+        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'plan_model', None)),
+        settings=settings,
+        registry=ToolRegistry([]),
+        memory=None,
+        mode='plan',
+        brain_name=selected_brain,
+    )
+    agent.brain.tools = []
+    if hasattr(agent.brain, 'tool_choice'):
+        setattr(agent.brain, 'tool_choice', 'none')
+
+    typer.echo(f'brain={selected_brain}')
+    raw = agent.handle_input(prompt)
+    raw_stripped = raw.strip()
+
+    parsed: dict | None = None
+    try:
+        parsed = json.loads(raw_stripped)
+    except Exception:
+        end = raw_stripped.rfind('}')
+        if end != -1:
+            start = raw_stripped.rfind('{', 0, end)
+            if start != -1:
+                try:
+                    parsed = json.loads(raw_stripped[start:end + 1])
+                except Exception:
+                    pass
+
+    if parsed is None:
+        typer.echo('Error: Failed to parse JSON output from agent.')
+        typer.echo(f'Raw output:\n{raw}')
+        raise typer.Exit(1)
+
+    errors = validate_design_json(parsed)
+    if errors:
+        typer.echo('Validation errors:')
+        for err in errors:
+            typer.echo(f'  - {err}')
+        typer.echo()
+        typer.echo('Raw output:')
+        typer.echo(raw)
+        raise typer.Exit(1)
+
+    name = parsed.get('name', 'design')
+    typer.echo(f'design_name={name}')
+    typer.echo(f'systems_count={len(parsed.get("systems", []))}')
+    typer.echo(f'features_count={len(parsed.get("features", []))}')
+    typer.echo(f'gamemodes_count={len(parsed.get("gamemodes", []))}')
+    typer.echo(f'event_types_count={len(parsed.get("event_types", []))}')
+    typer.echo()
+    typer.echo(json.dumps(parsed, indent=2, ensure_ascii=False))

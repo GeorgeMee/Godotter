@@ -232,3 +232,185 @@ def build_revise_prompt(task: PlanTask, feedback: str, goal: str) -> tuple[str, 
         ]
     )
     return prompt, PLAN_CONSTRAINTS.copy()
+
+
+DESIGN_EXAMPLE = json.dumps({
+    "name": "Sokoban",
+    "systems": [
+        {
+            "name": "grid_system",
+            "directory": "game/systems/grid/",
+            "description": "Manages grid cell states (wall, floor, box, goal, player). Initializes from level data.",
+            "publishes": ["GRID_CHANGED"],
+            "subscribes": [],
+            "export_vars": [{"name": "grid_width", "type": "int", "default": "10"}, {"name": "grid_height", "type": "int", "default": "10"}],
+        },
+        {
+            "name": "movement_system",
+            "directory": "game/systems/movement/",
+            "description": "Processes player input, validates moves, detects box pushes.",
+            "publishes": ["PLAYER_MOVED"],
+            "subscribes": ["GRID_CHANGED"],
+            "export_vars": [],
+        },
+    ],
+    "features": [
+        {
+            "name": "push_box_feature",
+            "directory": "game/features/push_box/",
+            "description": "Wires movement to box detection and goal checking.",
+            "uses_systems": ["movement_system", "box_system", "goal_system"],
+            "subscribes": ["PLAYER_MOVED"],
+        },
+    ],
+    "gamemodes": [
+        {
+            "name": "SokobanGameMode",
+            "directory": "game/gamemodes/sokoban/",
+            "description": "Standard Sokoban level runner.",
+            "systems": ["grid_system", "movement_system", "box_system", "goal_system"],
+            "features": ["push_box_feature"],
+            "export_vars": [{"name": "level_data_path", "type": "String", "default": ""}],
+        },
+    ],
+    "event_types": [
+        {"name": "GRID_CHANGED", "description": "Emitted when any cell in the grid changes state."},
+        {"name": "PLAYER_MOVED", "description": "Emitted after player movement is processed."},
+    ],
+}, indent=2, ensure_ascii=False)
+
+
+DESIGN_CONSTRAINTS = [
+    "Systems are self-contained: they publish events, subscribe to events, and know nothing about features, gamemodes, or levels.",
+    "Features wire systems together: they subscribe from multiple systems and coordinate game rules.",
+    "GameModes are the single orchestrator per level: they create systems and features as children in _ready().",
+    "System publish/subscribe references MUST point to named event_types.",
+    "Feature uses_systems MUST reference existing system names.",
+    "GameMode systems/features MUST reference existing system and feature names.",
+    "No System may reference another System, Feature, GameMode, or Level.",
+    "No Feature may reference another Feature or GameMode.",
+]
+
+
+def build_design_prompt(description: str) -> tuple[str, list[str]]:
+    prompt = '\n'.join(
+        [
+            'You are a game design assistant for the Godotter template conventions.',
+            '',
+            'Decompose the game idea below into Systems, Features, GameModes, and EventTypes.',
+            '',
+            'Output ONLY valid JSON. No markdown, no backticks, no commentary, no explanation.',
+            '',
+            '## Architecture Hierarchy',
+            '',
+            'References between layers MUST follow this strict order:',
+            '  game/levels/     -> game/gamemodes/',
+            '  game/gamemodes/  -> game/features/, game/systems/, game/core/',
+            '  game/features/   -> game/systems/, game/core/',
+            '  game/systems/    -> game/core/ ONLY',
+            '  game/core/       -> nothing in game/',
+            '',
+            'Systems are self-contained logic units. Each system:',
+            '  - owns ONE domain (grid, movement, monster, inventory, etc.)',
+            '  - has its own Timer-driven tick loop',
+            '  - publishes events when state changes',
+            '  - subscribes to events from core/ only',
+            '  - implements configure(bus) to receive EventBus reference',
+            '  - is a Node (never Node2D or Control)',
+            '',
+            'Features wire systems into gameplay rules. Each feature:',
+            '  - subscribes to events from system(s)',
+            '  - coordinates multiple systems to implement a game rule',
+            '  - can be enabled/disabled independently',
+            '  - does NOT own systems (systems are owned by GameMode)',
+            '',
+            'GameModes bundle systems and features into a level type. Each GameMode:',
+            '  - creates all systems and features as children in _ready()',
+            '  - is the single orchestrator per level scene',
+            '  - has exported parameters for level-specific config',
+            '  - multiple levels can reuse the same GameMode',
+            '',
+            '## Example',
+            '',
+            'Input: "player pushes boxes onto targets, with undo and step counter"',
+            '',
+            'Output:',
+            DESIGN_EXAMPLE,
+            '',
+            '## Output Schema',
+            '',
+            '{',
+            '  "name": "your_game_name",',
+            '  "systems": [',
+            '    {',
+            '      "name": "...",',
+            '      "directory": "game/systems/.../",',
+            '      "description": "...",',
+            '      "publishes": ["EVENT1", "EVENT2"],',
+            '      "subscribes": ["EVENT3"],',
+            '      "export_vars": [{"name": "...", "type": "int|float|String|bool", "default": "..."}]',
+            '    }',
+            '  ],',
+            '  "features": [',
+            '    {',
+            '      "name": "...",',
+            '      "directory": "game/features/.../",',
+            '      "description": "...",',
+            '      "uses_systems": ["system_name_1", "system_name_2"],',
+            '      "subscribes": ["EVENT1"]',
+            '    }',
+            '  ],',
+            '  "gamemodes": [',
+            '    {',
+            '      "name": "...",',
+            '      "directory": "game/gamemodes/.../",',
+            '      "description": "...",',
+            '      "systems": ["system_name_1"],',
+            '      "features": ["feature_name_1"],',
+            '      "export_vars": [{"name": "...", "type": "String", "default": ""}]',
+            '    }',
+            '  ],',
+            '  "event_types": [',
+            '    { "name": "EVENT1", "description": "..." },',
+            '    { "name": "EVENT2", "description": "..." }',
+            '  ]',
+            '}',
+            '',
+            'Game idea to decompose:',
+            description,
+        ]
+    )
+    return prompt, DESIGN_CONSTRAINTS.copy()
+
+
+def validate_design_json(data: dict) -> list[str]:
+    errors: list[str] = []
+    system_names = {s["name"] for s in data.get("systems", []) if "name" in s}
+    feature_names = {f["name"] for f in data.get("features", []) if "name" in f}
+    event_names = {e["name"] for e in data.get("event_types", []) if "name" in e}
+
+    for sys in data.get("systems", []):
+        for ev in sys.get("publishes", []):
+            if ev not in event_names:
+                errors.append(f'system "{sys["name"]}" publishes unknown event "{ev}"')
+        for ev in sys.get("subscribes", []):
+            if ev not in event_names:
+                errors.append(f'system "{sys["name"]}" subscribes to unknown event "{ev}"')
+
+    for feat in data.get("features", []):
+        for sys_name in feat.get("uses_systems", []):
+            if sys_name not in system_names:
+                errors.append(f'feature "{feat["name"]}" references unknown system "{sys_name}"')
+        for ev in feat.get("subscribes", []):
+            if ev not in event_names:
+                errors.append(f'feature "{feat["name"]}" subscribes to unknown event "{ev}"')
+
+    for gm in data.get("gamemodes", []):
+        for sys_name in gm.get("systems", []):
+            if sys_name not in system_names:
+                errors.append(f'gamemode "{gm["name"]}" references unknown system "{sys_name}"')
+        for feat_name in gm.get("features", []):
+            if feat_name not in feature_names:
+                errors.append(f'gamemode "{gm["name"]}" references unknown feature "{feat_name}"')
+
+    return errors
