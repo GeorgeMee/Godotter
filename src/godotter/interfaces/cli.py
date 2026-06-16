@@ -375,7 +375,22 @@ def task_run_command(
                 'Act-mode requirements:',
                 '- If tool-calls are available, use apply_patch and other tools to make changes.',
                 '- If tool-calls are not available, output a single unified diff patch (no commentary).',
-                '- After changes, ensure verification commands pass.',
+                '- After each change, BEFORE finishing, you MUST self-verify:',
+                '  1. Call script_lint to check for syntax errors on modified files.',
+                '  2. Call headless_run to run relevant tests (e.g. headless_run(scene="res://tests/...")).',
+                '  3. If any verification fails, fix the issue and re-verify before finishing.',
+                '- Only stop calling tools when all checks pass.',
+                '',
+                'Available self-verification tools:',
+                '  script_lint(path="<file>") — check a single script or omit for whole project.',
+                '  headless_run(scene="res://...") — run a test scene in headless mode.',
+                '',
+                'Before you finish, verify EVERY acceptance criterion below is met. If any is not done, continue working.',
+                'Checklist (you MUST confirm each item):',
+                *[f'  [ ] {step}' for step in pack.execution_plan],
+                '',
+                'Scope files that must be modified:',
+                *[f'  - {p}' for p in pack.relevant_files if p.reason == 'scope'],
                 '',
                 'Before you finish, verify EVERY acceptance criterion below is met. If any is not done, continue working.',
                 'Checklist (you MUST confirm each item):',
@@ -418,11 +433,11 @@ def task_run_command(
                     '',
                     f'Previous attempt {attempt_index - 1} FAILED. You MUST debug and fix the root cause.',
                     '',
-                    'Required diagnostic process:',
-                    '1. Read the verification output below carefully — identify what failed, what passed.',
-                    '2. Form a NEW hypothesis about the root cause. If your last hypothesis was about logic, consider timing/async/signal-lifecycle issues.',
-                    '3. If needed, add temporary debug prints (print("[DEBUG ...]")) to the failing code, then re-run the test to gather evidence.',
-                    '4. Once you have evidence, apply the fix and verify.',
+                    'Required diagnostic process (use your available tools):',
+                    '1. Run script_lint on the failing files — check for syntax errors.',
+                    '2. Run headless_run on the failing test harness — check runtime behavior.',
+                    '3. Add temporary debug prints to the failing code, then re-run the test.',
+                    '4. Once you have evidence, apply the fix and re-verify with script_lint and headless_run.',
                     '',
                     'Full verification output from the last attempt:',
                     failure_report,
@@ -1260,6 +1275,43 @@ def _scaffold_test_command(
     typer.echo(f'scene={result.scene_path.relative_to(root).as_posix()}')
     typer.echo(f'script={result.script_path.relative_to(root).as_posix()}')
     typer.echo(f'uid={result.uid}')
+
+
+@scaffold_app.command('from-design', help='Generate project skeleton from a Design agent JSON decomposition.')
+def scaffold_from_design_command(
+    design_file: Path = typer.Argument(
+        ...,
+        help='Path to the Design JSON file (output of godotter design decompose).',
+    ),
+    workspace: Path | None = typer.Option(
+        None,
+        '--workspace',
+        help='Workspace root path (defaults to current directory / GODOTTER_WORKSPACE_ROOT).',
+    ),
+) -> None:
+    from godotter.tasks.planning import validate_design_json
+    from godotter.operations.design_scaffold import scaffold_from_design
+
+    base_settings = get_settings()
+    root, _ = _resolve_workspace_root(base_settings, workspace=workspace)
+
+    try:
+        data = json.loads(design_file.read_text(encoding='utf-8'))
+    except Exception as exc:
+        typer.echo(f'Error: failed to read design file: {exc}')
+        raise typer.Exit(1) from exc
+
+    errors = validate_design_json(data)
+    if errors:
+        typer.echo('Validation errors:')
+        for err in errors:
+            typer.echo(f'  - {err}')
+        raise typer.Exit(1)
+
+    result = scaffold_from_design(data, root)
+    typer.echo(f'created_files={len(result.created_files)}')
+    for f in result.created_files:
+        typer.echo(f'  create {f}')
 
 
 @export_app.command('build', help='Export a Godot project package using an export preset.')

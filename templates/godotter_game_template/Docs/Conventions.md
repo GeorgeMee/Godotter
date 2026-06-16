@@ -33,7 +33,7 @@ identify the layer at a glance without checking the parent directory.
 | Layer | Directory | Main file | Example |
 |-------|-----------|-----------|---------|
 | System | `game/systems/{name}/` | `{name}_system.gd` | `game/systems/pacman/pacman_system.gd` |
-| Feature | `game/features/{parent}/{name}/` | `{name}_feature.gd` | `game/features/pacman/eat_dot/eat_dot_feature.gd` |
+| Feature | `game/features/{name}/` | `{name}_feature.gd` | `game/features/eat_dot/eat_dot_feature.gd` |
 | GameMode | `game/gamemodes/{name}/` | `{name}_mode.gd` | `game/gamemodes/pacman/pacman_mode.gd` |
 
 ### Rules
@@ -60,7 +60,7 @@ game/systems/ghost/
 ├── clyde.tscn / clyde.gd
 └── ghost_system.gd.uid
 
-game/features/pacman/eat_dot/
+game/features/eat_dot/
 ├── eat_dot_feature.gd
 └── eat_dot_feature.gd.uid
 
@@ -192,7 +192,7 @@ func _ready() -> void:
     add_child(pacman)
     pacman.configure(bus)
 
-    var eat_dot = preload("res://game/features/pacman/eat_dot/eat_dot_feature.gd").new()
+    var eat_dot = preload("res://game/features/eat_dot/eat_dot_feature.gd").new()
     eat_dot.name = "EatDotFeature"
     add_child(eat_dot)
     eat_dot.configure(bus)

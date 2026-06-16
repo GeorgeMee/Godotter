@@ -211,10 +211,35 @@ function showEnvSetDialog(key, suggest, currentValue) {
       runBuildDoctor();
     } catch (error) {
       alert(`保存失败: ${error.message}`);
-    }
-  });
-}
+  }
+});
 
+
+document.getElementById("delete-session-btn").addEventListener("click", async () => {
+  if (!currentSession || !currentProject) return;
+  const title = currentSession.title || currentSession.session_id;
+  if (!confirm(`删除会话"${title}"？`)) return;
+  try {
+    await fetchJson(
+      `/api/projects/${encodeURIComponent(currentProject)}/sessions/${encodeURIComponent(currentSession.session_id)}`,
+      {method: "DELETE"},
+    );
+    currentSession = null;
+    latestReview = null;
+    currentRun = null;
+    localStorage.removeItem(selectedSessionKey(currentProject));
+    if (runPollTimer) { clearTimeout(runPollTimer); runPollTimer = null; }
+    renderMessages([]);
+    renderReview(null);
+    document.getElementById("session-status").textContent = "会话已删除。";
+    document.getElementById("delete-session-btn").disabled = true;
+    await loadSessionList();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  }
+});
+
+}
 async function submitBuild(event) {
   event.preventDefault();
   const message = document.getElementById("build-message");
@@ -641,6 +666,7 @@ async function loadSavedSession() {
     const detail = await fetchJson(`/api/projects/${encodeURIComponent(currentProject)}/sessions/${encodeURIComponent(savedSession)}`);
     currentSession = detail.session;
     latestReview = detail.latest_review;
+    updateSessionDeleteBtn();
     renderMessages(detail.messages);
     renderReview(latestReview);
     await loadLatestRun();
@@ -654,6 +680,11 @@ async function loadSavedSession() {
     renderRunHistory([]);
     status.textContent = "之前的对话不存在，发送消息时会创建新对话。";
   }
+}
+
+function updateSessionDeleteBtn() {
+  const btn = document.getElementById("delete-session-btn");
+  if (btn) btn.disabled = !currentSession;
 }
 
 async function loadSessionList() {
@@ -687,6 +718,7 @@ document.getElementById("load-session-btn").addEventListener("click", async () =
     );
     currentSession = detail.session;
     latestReview = detail.latest_review;
+    updateSessionDeleteBtn();
     localStorage.setItem(selectedSessionKey(currentProject), sessionId);
     renderMessages(detail.messages);
     renderReview(latestReview);
@@ -732,6 +764,7 @@ async function ensureSession(initialTitle = "") {
     body: JSON.stringify({title: initialTitle.slice(0, 48)}),
   });
   currentSession = created.session;
+  updateSessionDeleteBtn();
   localStorage.setItem(selectedSessionKey(currentProject), currentSession.session_id);
   document.getElementById("session-status").textContent = `当前对话：${currentSession.title}`;
   return currentSession;
@@ -1302,6 +1335,7 @@ async function sendChatMessage() {
       },
     );
     currentSession = reply.session;
+    updateSessionDeleteBtn();
     appendBubble("assistant", reply.message.content);
     status.textContent = "已回复。";
   } catch (error) {
@@ -1373,6 +1407,7 @@ document.getElementById("new-chat").addEventListener("click", async () => {
   }
   currentRun = null;
   currentSession = null;
+  updateSessionDeleteBtn();
   latestReview = null;
   nextRunEventIndex = 0;
   taskRuntimeStatus = {};
@@ -1385,6 +1420,7 @@ document.getElementById("new-chat").addEventListener("click", async () => {
       body: JSON.stringify({title: "New chat"}),
     });
     currentSession = created.session;
+    updateSessionDeleteBtn();
     localStorage.setItem(selectedSessionKey(currentProject), currentSession.session_id);
     renderMessages([]);
     renderReview(null);

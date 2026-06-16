@@ -182,7 +182,7 @@ class HeadlessRunTool(Tool):
         runner = _build_godot_runner(context)
         timeout = _to_int(kwargs.get('timeout'), default=60)
         scene = kwargs.get('scene')
-        result = runner.run_project(timeout=timeout, scene=str(scene) if scene else None)
+        result = runner.run_project(timeout=timeout, scene=str(scene) if scene else None, headless=True)
         return _render_run_result('headless_run', result, target=str(scene or '(project)'))
 
 

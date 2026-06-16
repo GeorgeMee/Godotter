@@ -1623,6 +1623,53 @@ def _secondary_page(
         border-color: var(--line-strong);
         background: var(--accent-soft);
       }}
+      .project-row {{
+        display: flex;
+        gap: 0;
+        align-items: stretch;
+      }}
+      .project-row .project-button {{
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+      }}
+      .project-delete-btn {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 44px;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-left: none;
+        border-radius: 0 12px 12px 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 14px;
+        cursor: pointer;
+        transition: border-color 0.15s, color 0.15s, background 0.15s;
+        padding: 0;
+      }}
+      .project-delete-btn:hover {{
+        border-color: #ef4444;
+        color: #ef4444;
+        background: rgba(239, 68, 68, 0.08);
+      }}
+      .modal-overlay {{
+        position: fixed;
+        inset: 0;
+        z-index: 300;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }}
+      .modal-box {{
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 20px;
+        min-width: min(360px, 90vw);
+        max-width: 90vw;
+      }}
       .qa-item {{
         border: 1px solid var(--line);
         border-radius: 14px;
@@ -1883,6 +1930,21 @@ def _secondary_page(
         gap: 6px;
         flex-wrap: wrap;
       }}
+
+      button.primary {{
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+        font-weight: 700;
+      }}
+      button.primary:hover {{
+        background: var(--accent-2);
+        border-color: var(--accent-2);
+      }}
+      button.primary:disabled {{
+        opacity: 0.4;
+        cursor: not-allowed;
+      }}
       .design-tab {{
         display: inline-flex;
         align-items: center;
@@ -2135,6 +2197,72 @@ async def project_create(request: Request) -> dict[str, object]:
 def project_set_default(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
     return _set_default_project(name)
+
+
+@app.delete('/api/projects/{name}')
+async def project_delete(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    normalized = _validate_project_name(name)
+    registry = load_project_registry(_projects_path())
+    if normalized not in registry.projects:
+        raise HTTPException(status_code=404, detail='unknown_project')
+
+    entry = registry.projects[normalized]
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    delete_files = bool(payload.get('delete_files', False))
+
+    removed_root = None
+    if delete_files:
+        removed_root = entry.workspace_root.as_posix()
+        import shutil
+        shutil.rmtree(entry.workspace_root, ignore_errors=True)
+
+    projects = _registered_project_entries()
+    del projects[normalized]
+
+    default_project = registry.default_project
+    if default_project == normalized:
+        default_project = next(iter(projects)) if projects else None
+
+    _write_projects_toml(default_project, projects)
+    if default_project != normalized:
+        _set_env_key('GODOTTER_DEFAULT_PROJECT', default_project or '')
+
+    return {
+        'ok': True,
+        'removed': normalized,
+        'deleted_files': delete_files,
+        'removed_root': removed_root,
+        'projects': list(_registered_projects().values()),
+    }
+
+
+@app.post('/api/projects/{name}/scaffold')
+async def project_scaffold(name: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail='invalid_json')
+
+    from godotter.tasks.planning import validate_design_json
+    from godotter.operations.design_scaffold import scaffold_from_design
+
+    errors = validate_design_json(payload)
+    if errors:
+        raise HTTPException(status_code=400, detail='; '.join(errors))
+
+    result = scaffold_from_design(payload, root)
+    return {
+        'ok': True,
+        'created_files': result.created_files,
+        'count': len(result.created_files),
+    }
 
 
 @app.get('/api/projects/{name}/summary')
@@ -2556,6 +2684,24 @@ def project_session_get(name: str, session_id: str, request: Request) -> dict[st
     return _session_detail(root, session_id)
 
 
+@app.delete('/api/projects/{name}/sessions/{session_id}')
+def project_session_delete(name: str, session_id: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    root = _project_root_or_404(name)
+    sid = _validate_id(session_id, prefix='cs')
+    meta = _session_meta_path(root, sid)
+    data = _session_data_dir(root, sid)
+    removed = []
+    if meta.exists():
+        meta.unlink()
+        removed.append(meta.name)
+    if data.exists():
+        import shutil
+        shutil.rmtree(data)
+        removed.append(data.name)
+    return {'ok': True, 'removed': removed, 'session_id': sid}
+
+
 @app.post('/api/projects/{name}/sessions/{session_id}/messages')
 async def project_session_message_create(name: str, session_id: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
@@ -2903,8 +3049,8 @@ def projects_page(request: Request) -> str:
       </section>
     """
     script_html = """<script>
-      async function api(path) {
-        const response = await fetch(path);
+      async function api(path, options = {}) {
+        const response = await fetch(path, options);
         if (!response.ok) throw new Error(await response.text());
         return response.json();
       }
@@ -2984,11 +3130,52 @@ def projects_page(request: Request) -> str:
         const list = document.getElementById('project-list');
         list.innerHTML = '';
         for (const project of data.projects) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'project-row';
           const button = document.createElement('button');
           button.className = 'project-button';
           button.innerHTML = `<span>${escapeHtml(project.name)}${project.is_default ? ' - default' : ''}</span><span>${project.exists ? 'present' : 'missing'}</span>`;
           button.addEventListener('click', () => selectProject(project.name, button));
-          list.appendChild(button);
+          wrapper.appendChild(button);
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'project-delete-btn';
+          delBtn.title = '删除项目';
+          delBtn.textContent = '✕';
+          delBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const showDialog = () => {
+              const overlay = document.createElement('div');
+              overlay.className = 'modal-overlay';
+              overlay.innerHTML = '<div class="modal-box">' +
+                '<h3 style="margin-bottom:10px">删除项目</h3>' +
+                '<p class="muted" style="margin-bottom:14px">' + escapeHtml(project.name) + '</p>' +
+                '<label class="checkbox-line" style="margin-bottom:14px">' +
+                '<input type="checkbox" id="delete-files-checkbox" />' +
+                '<span>同时删除磁盘文件</span>' +
+                '</label>' +
+                '<div class="actions">' +
+                '<button type="button" id="modal-cancel" class="secondary">取消</button>' +
+                '<button type="button" id="modal-confirm" style="background:#ef4444;border-color:#ef4444;color:#fff">确认删除</button>' +
+                '</div></div>';
+              document.body.appendChild(overlay);
+              overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+              document.getElementById('modal-cancel').addEventListener('click', () => overlay.remove());
+              document.getElementById('modal-confirm').addEventListener('click', async () => {
+                const deleteFiles = document.getElementById('delete-files-checkbox').checked;
+                overlay.remove();
+                try {
+                  const result = await api('/api/projects/' + encodeURIComponent(project.name), {method: 'DELETE', headers: {'content-type': 'application/json'}, body: JSON.stringify({delete_files: deleteFiles})});
+                  init();
+                } catch (err) {
+                  alert('删除失败: ' + err.message);
+                }
+              });
+            };
+            showDialog();
+          });
+          wrapper.appendChild(delBtn);
+          list.appendChild(wrapper);
           const saved = localStorage.getItem('godotter:selectedProject');
           if (project.name === saved || (!saved && project.is_default) || data.projects.length === 1) {
             selectProject(project.name, button);
@@ -3028,6 +3215,8 @@ def design_page(request: Request) -> str:
             <option value="">选择历史会话...</option>
           </select>
           <button type="button" class="secondary" id="design-load-session">加载</button>
+          <button type="button" class="secondary" id="design-delete-session" disabled>删除</button>
+          <button type="button" id="design-create-project" class="primary" disabled>创建项目</button>
           <span class="new-chat-wrap"><button type="button" id="design-new-chat">新对话</button></span>
         </div>
         <div id="design-tabs" class="design-tabs" style="display:none;margin-bottom:10px;">
@@ -3121,6 +3310,7 @@ def design_page(request: Request) -> str:
 
       function renderDesign(json) {
         _lastDesignJson = json;
+        document.getElementById('design-create-project').disabled = false;
         tabs.style.display = 'flex';
         document.getElementById('design-count-systems').textContent = (json.systems || []).length;
         document.getElementById('design-count-features').textContent = (json.features || []).length;
@@ -3162,6 +3352,39 @@ def design_page(request: Request) -> str:
           });
         });
         panel.insertBefore(copyBtn, panel.firstChild);
+      }
+
+      async function createProject() {
+        if (!_lastDesignJson) return;
+        const btn = document.getElementById('design-create-project');
+        const defaultName = _lastDesignJson.name || 'design';
+        const name = window.prompt('项目名:', defaultName);
+        if (!name) return;
+        btn.disabled = true;
+        btn.textContent = '创建中...';
+        try {
+          // 1. Create project
+          const created = await fetchJson('/api/projects', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify({name, workspace_root: '', set_default: false}),
+          });
+          // 2. Scaffold from design JSON
+          const scaf = await fetchJson('/api/projects/' + encodeURIComponent(name) + '/scaffold', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify(_lastDesignJson),
+          });
+          // 3. Set as default workspace
+          await fetch('/api/projects/' + encodeURIComponent(name) + '/default', {method: 'POST'});
+          // 4. Navigate to workspace
+          localStorage.setItem('godotter:selectedProject', name);
+          window.location.href = '/';
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = '创建项目';
+          alert('创建失败: ' + err.message);
+        }
       }
 
       function handleReply(text) {
@@ -3267,12 +3490,33 @@ def design_page(request: Request) -> str:
         if (_designController) _designController.abort();
         currentDesignSession = null;
         _lastDesignJson = null;
+        document.getElementById('design-delete-session').disabled = true;
         panel.innerHTML = '';
         renderMessages([]);
         status.textContent = '新对话';
         localStorage.removeItem(STORAGE_KEY);
         await loadDesignSessions();
       });
+
+      document.getElementById('design-delete-session').addEventListener('click', async () => {
+        if (!currentDesignSession) return;
+        const sid = currentDesignSession.session_id;
+        if (!window.confirm('确定删除当前会话吗？')) return;
+        try {
+          await fetchJson('/api/design/sessions/' + encodeURIComponent(sid), {method: 'DELETE'});
+          currentDesignSession = null;
+          _lastDesignJson = null;
+          panel.innerHTML = '';
+          renderMessages([]);
+          status.textContent = '已删除';
+          localStorage.removeItem(STORAGE_KEY);
+          await loadDesignSessions();
+        } catch (err) {
+          alert('删除失败: ' + err.message);
+        }
+      });
+
+      document.getElementById('design-create-project').addEventListener('click', createProject);
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -3308,7 +3552,8 @@ def design_page(request: Request) -> str:
         if (savedId) {
           try {
             const detail = await fetchJson('/api/design/sessions/' + encodeURIComponent(savedId));
-            currentDesignSession = detail.session;
+          currentDesignSession = detail.session;
+          document.getElementById('design-delete-session').disabled = false;
             renderMessages(detail.messages || []);
             status.textContent = '当前：' + (currentDesignSession.title || 'Design chat');
           } catch (_) {
@@ -3444,6 +3689,23 @@ def design_sessions_get(session_id: str, request: Request) -> dict[str, object]:
     }
 
 
+@app.delete('/api/design/sessions/{session_id}')
+def design_sessions_delete(session_id: str, request: Request) -> dict[str, object]:
+    _require_token_if_configured(request)
+    sid = _validate_id(session_id, prefix='ds')
+    meta = _design_session_path(sid)
+    data_dir = meta.parent / sid
+    removed = []
+    if meta.exists():
+        meta.unlink()
+        removed.append(meta.name)
+    if data_dir.exists():
+        import shutil
+        shutil.rmtree(data_dir)
+        removed.append(data_dir.name)
+    return {'ok': True, 'removed': removed, 'session_id': sid}
+
+
 def _build_design_system_prompt() -> str:
     template_dir = Path(__file__).resolve().parents[2] / 'templates' / 'godotter_game_template'
     conventions_path = template_dir / 'Docs' / 'Conventions.md'
@@ -3467,7 +3729,7 @@ def _build_design_system_prompt() -> str:
   "features": [
     {
       "name": "eat_dot",
-      "directory": "game/features/pacman/eat_dot/",
+      "directory": "game/features/eat_dot/",
       "description": "Detects Pac-Man on a dot tile, removes the dot and adds score.",
       "uses_systems": ["pacman"],
       "subscribes": ["PACMAN_MOVED"]
@@ -3515,7 +3777,7 @@ RULES:
 
 NAMING RULES (from template conventions):
 - system name "pacman" → main file: game/systems/pacman/pacman_system.gd
-- feature name "eat_dot" → main file: game/features/pacman/eat_dot/eat_dot_feature.gd
+- feature name "eat_dot" → main file: game/features/eat_dot/eat_dot_feature.gd
 - gamemode name "pacman" → main file: game/gamemodes/pacman/pacman_mode.gd
 - Directory name is short (no suffix). Suffix is on the main file only.
 - The "name" field uses the short name (e.g., "pacman", not "pacman_system").
