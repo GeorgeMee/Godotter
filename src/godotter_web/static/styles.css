@@ -1429,6 +1429,92 @@ small {
 
 .truncated-tag { font-size: 0.7rem; }
 
+.scene-inspect {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  margin-top: 12px;
+  background: rgba(10, 14, 20, 0.6);
+  overflow: auto;
+  font-size: 0.85em;
+}
+.scene-inspect-head {
+  margin-bottom: 10px;
+}
+.scene-section-label {
+  display: block;
+  font-weight: 700;
+  margin: 10px 0 6px;
+  font-size: 0.9em;
+  color: var(--text);
+}
+.scene-ext-resources {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.scene-ext-resource {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.82em;
+}
+.scene-ext-resource .scene-path {
+  color: var(--muted);
+  font-size: 0.92em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scene-node-tree {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.scene-node {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  min-height: 28px;
+}
+.scene-node:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
+.scene-node-name {
+  font-weight: 600;
+  color: #93c5fd;
+}
+.scene-node-type {
+  font-size: 0.8em;
+}
+.scene-instance {
+  font-size: 0.78em;
+  color: var(--amber);
+}
+.scene-node-props {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.scene-prop {
+  font-size: 0.75em;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--muted);
+}
+.scene-connection {
+  padding: 3px 0;
+  font-size: 0.82em;
+}
+.scene-connection code {
+  font-size: 0.9em;
+}
+
 @media (min-width: 860px) {
   .shell {
     padding: 54px 24px 24px;

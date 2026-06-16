@@ -583,6 +583,97 @@ async function loadProjectTree(path = currentTreePath) {
   }
 }
 
+async function inspectScene(scenePath) {
+  const preview = document.getElementById("scene-inspect");
+  if (!preview || !currentProject) return;
+  preview.hidden = false;
+  preview.innerHTML = '<p class="muted">解析中...</p>';
+  try {
+    const result = await fetchJson(
+      `/api/projects/${encodeURIComponent(currentProject)}/scene-inspect?scene_path=${encodeURIComponent(scenePath)}`,
+    );
+    const scene = result.scene;
+    if (!scene) {
+      preview.innerHTML = '<p class="muted">无法解析场景文件。</p>';
+      return;
+    }
+    let html = '<div class="scene-inspect-head">';
+    html += `<strong>${escapeHtml(scenePath)}</strong>`;
+    if (scene.header) {
+      const h = scene.header;
+      html += ` <span class="muted">format=${h.format || "?"}`;
+      if (h.load_steps) html += ` · load_steps=${h.load_steps}`;
+      if (h.uid) html += ` · uid=${h.uid}`;
+      html += '</span>';
+    }
+    html += '</div>';
+    const extResources = scene.ext_resources || [];
+    if (extResources.length) {
+      html += '<div class="scene-ext-resources">';
+      html += `<span class="scene-section-label">外部资源 (${extResources.length})</span>`;
+      for (const r of extResources) {
+        html += `<div class="scene-ext-resource"><code>${escapeHtml(r.id || "")}</code> <span class="muted">${escapeHtml(r.resource_type || "")}</span> <span class="scene-path">${escapeHtml(r.path || "")}</span></div>`;
+      }
+      html += '</div>';
+    }
+    // Build node tree
+    const nodes = scene.nodes || [];
+    if (nodes.length) {
+      html += `<div class="scene-section-label">节点 (${nodes.length})</div>`;
+      html += '<div class="scene-node-tree">';
+      // Build parent→children map
+      const childrenMap = {};
+      const rootNodes = [];
+      for (const n of nodes) {
+        if (!n.parent) {
+          rootNodes.push(n);
+        } else {
+          if (!childrenMap[n.parent]) childrenMap[n.parent] = [];
+          childrenMap[n.parent].push(n);
+        }
+      }
+      function renderNodeTree(node, depth) {
+        let nodeHtml = '<div class="scene-node" style="padding-left:' + (depth * 16) + 'px">';
+        nodeHtml += `<span class="scene-node-name">${escapeHtml(node.name)}</span> <span class="scene-node-type muted">(${escapeHtml(node.node_type)})</span>`;
+        if (node.instance) {
+          nodeHtml += ` <span class="scene-instance">instance: ${escapeHtml(node.instance)}</span>`;
+        }
+        // Show key properties
+        const props = node.properties || [];
+        const keyProps = props.filter(p => p.key === "script" || p.key === "group" || p.key === "layer");
+        if (keyProps.length) {
+          nodeHtml += '<div class="scene-node-props">';
+          for (const p of keyProps) {
+            nodeHtml += `<span class="scene-prop">${escapeHtml(p.key)}=${escapeHtml(p.value)}</span>`;
+          }
+          nodeHtml += '</div>';
+        }
+        nodeHtml += '</div>';
+        // Children
+        for (const child of (childrenMap[node.name] || [])) {
+          nodeHtml += renderNodeTree(child, depth + 1);
+        }
+        return nodeHtml;
+      }
+      for (const root of rootNodes) {
+        html += renderNodeTree(root, 0);
+      }
+      html += '</div>';
+    }
+    // Connections
+    const connections = scene.connections || [];
+    if (connections.length) {
+      html += `<div class="scene-section-label">信号连接 (${connections.length})</div>`;
+      for (const c of connections) {
+        html += `<div class="scene-connection"><code>${escapeHtml(c.from_node || "")}</code> → <code>${escapeHtml(c.signal || "")}</code> → <code>${escapeHtml(c.to_node || "")}</code>.<code>${escapeHtml(c.method || "")}</code></div>`;
+      }
+    }
+    preview.innerHTML = html;
+  } catch (error) {
+    preview.innerHTML = `<p class="muted">加载失败: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
 function treeNodeHtml(node) {
   if (!node) {
     return '<p class="muted">Empty tree.</p>';
@@ -611,9 +702,11 @@ function treeNodeHtml(node) {
     const size = node.size !== undefined
       ? ` <span class="tree-size file-size">${formatBytes(node.size)}</span>`
       : "";
+    const isTscn = node.name.endsWith(".tscn");
+    const clickAttr = isTscn ? ` onclick="inspectScene('${escapeHtml(node.path)}')"` : "";
     return `
       <div class="tree-node">
-        <div class="tree-row tree-file${gitClass}">
+        <div class="tree-row tree-file${gitClass}"${clickAttr}>
           <span class="tree-toggle" style="visibility:hidden">▶</span>
           <code>${escapeHtml(node.name)}${size}</code>
         </div>

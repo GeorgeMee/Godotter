@@ -2295,6 +2295,28 @@ def project_tree(name: str, request: Request, path: str = '', max_depth: int = 3
     return {'ok': True, 'name': name, **_project_tree(root, path, max_depth=depth, max_entries=800)}
 
 
+@app.get('/api/projects/{name}/scene-inspect')
+def project_scene_inspect(name: str, request: Request, scene_path: str = '') -> dict[str, object]:
+    _require_token_if_configured(request)
+    if not scene_path:
+        raise HTTPException(status_code=400, detail='scene_path_required')
+    root = _project_root_or_404(name)
+    path = _safe_project_file(root, scene_path)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail='scene_file_not_found')
+    from godotter.runtime.scene_parser import parse_scene
+    from dataclasses import asdict
+    try:
+        parsed = parse_scene(path)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f'parse_error: {exc}')
+    return {
+        'ok': True,
+        'path': scene_path,
+        'scene': asdict(parsed),
+    }
+
+
 @app.get('/api/projects/{name}/plans')
 def project_plans(name: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
