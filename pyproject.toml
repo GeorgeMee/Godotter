@@ -17,7 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-godotter = "godotter.cli:app"
+gdt = "godotter.interfaces.gdt_cli:app"
+godotter = "godotter.interfaces.machine_cli:app"
 
 [project.optional-dependencies]
 dev = [

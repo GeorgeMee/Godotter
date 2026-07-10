@@ -227,7 +227,7 @@ def build_revise_prompt(task: PlanTask, feedback: str, goal: str) -> tuple[str, 
             f'Original verification: {json.dumps(task.verification, ensure_ascii=False)}',
             f'Original dependencies: {json.dumps(task.depends_on, ensure_ascii=False)}',
             '',
-            f'Reviewer feedback — you MUST address this:',
+            f'Reviewer feedback 鈥?you MUST address this:',
             feedback,
         ]
     )

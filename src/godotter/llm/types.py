@@ -60,20 +60,6 @@ class StubBrain(Brain):
                 raw_content={'type': 'tool_use', 'name': name, 'input': args},
             )
 
-        if isinstance(content, str) and content.startswith('remember '):
-            memory_content = content.removeprefix('remember ')
-            return Thought(
-                text='[stub] saving memory',
-                tool_calls=[
-                    ToolCall(
-                        id='stub-tool-1',
-                        name='save_memory',
-                        args={'content': memory_content},
-                    )
-                ],
-                raw_content={'type': 'tool_use', 'name': 'save_memory', 'input': {'content': memory_content}},
-            )
-
         return Thought(
             text=f'[stub:{len(self.tools)} tools] {content}',
             raw_content={'type': 'text', 'text': content},

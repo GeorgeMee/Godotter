@@ -6,17 +6,19 @@ Current goal:
 
 - keep domain boundaries explicit
 - make the project installable and runnable early
-- leave room for workflow and runtime growth without another package move
+- keep public actions separate from grouped service capabilities
 
 Package ownership:
 
 - `godotter.agent`: orchestration entry logic
-- `godotter.workflows`: executable workflow definitions
-- `godotter.runtime`: Godot and process runtime adapters
-- `godotter.tools`: structured tools exposed to orchestration
-- `godotter.context`: repository and scene context building
-- `godotter.policies`: safety and execution policy checks
-- `godotter.git`: checkpoint and rollback helpers
+- `godotter.config`: settings and application logging setup
+- `godotter.operations`: public action contracts, schemas, registry, and operation handlers
+- `godotter.services`: business services and lower-level capability modules
+- `godotter.services.godot`: Godot runner, project inspection, validation, export, UID, LSP, and Godot-facing services
+- `godotter.services.project`: workspace file/git/patch services and project/scene/test scaffolding
+- `godotter.services.llm`: provider configuration helpers
+- `godotter.context`: execution context, memory, project summaries, and scout context
 - `godotter.llm`: model runtime abstractions
-- `godotter.interfaces`: CLI and future external interfaces
+- `godotter.interfaces`: human and machine CLI entry points
+- `godotter.tasks`: plan/work/run state models that have not yet moved into services
 - `godotter.utils`: shared helpers

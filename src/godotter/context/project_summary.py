@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from godotter.runtime import load_project_info, parse_scene
+from godotter.services.godot import load_project_info, parse_scene
 
 
 _IGNORED_PARTS = {'.git', '.venv', '.godot', '.godotter', '__pycache__'}
@@ -160,7 +160,7 @@ def _render_subtree(
     for node in nodes:
         type_suffix = f' ({node.node_type})' if node.node_type else ''
         instance_suffix = ' [instance]' if node.instance else ''
-        prefix = '  ' * depth + ('└─ ' if depth > 0 else '')
+        prefix = '  ' * depth + ('鈹斺攢 ' if depth > 0 else '')
         lines.append(f'{prefix}{node.name}{type_suffix}{instance_suffix}')
         child_key = node.name if not node.parent or node.parent == '.' else f'{node.parent}/{node.name}'
         children = children_map.get(child_key, [])

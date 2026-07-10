@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import html
 import json
@@ -15,13 +15,13 @@ from fastapi import FastAPI
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from godotter.agent import Agent
 from godotter.config import get_settings
-from godotter.context import Memory, build_project_summary, render_project_summary, build_chat_scout_context
-from godotter.llm import create_brain
-from godotter.operations.projects import scaffold_godot_project
-from godotter.project_registry import load_project_registry
-from godotter.runtime.builds import list_build_reports, run_export_build, run_export_doctor
+from godotter.services.project.registry import load_project_registry
+from godotter.services.chat import ChatSessionService
+from godotter.services.chat.session_repository import ChatSessionRepository
+from godotter.services.chat.session_types import ChatSession
+from godotter.services.godot.builds import list_build_reports, run_export_build, run_export_doctor
+from godotter.services.project.scaffolding import scaffold_godot_project
 from godotter.utils.envfile import EnvFile
 from godotter.tasks.planpack import (
     PlanPack,
@@ -39,7 +39,7 @@ from godotter.tasks.planning import (
     validate_plan_tasks,
 )
 from godotter.tasks.scout import scout_workspace
-from godotter.tools import ToolRegistry, build_default_tools
+from godotter.operations import OperationRegistry, build_default_operations
 
 
 app = FastAPI(title='Godotter Web Console', version='0.0.1')
@@ -809,6 +809,10 @@ def _update_review_status(review: dict[str, object]) -> None:
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if hasattr(payload, 'meta_dict'):
+        payload = payload.meta_dict()  # type: ignore[assignment]
+    elif hasattr(payload, '__dataclass_fields__'):
+        payload = asdict(payload)  # type: ignore[assignment]
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8', newline='\n')
 
 
@@ -816,24 +820,12 @@ def _read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding='utf-8'))
 
 
+def _chat_session_repo(workspace_root: Path) -> ChatSessionRepository:
+    return ChatSessionRepository(workspace_root.resolve())
+
+
 def _create_session(workspace_root: Path, project_name: str, *, title: str = '') -> dict[str, object]:
-    session_id = _new_id('cs')
-    now = _now_iso()
-    session = {
-        'session_id': session_id,
-        'created_at': now,
-        'updated_at': now,
-        'title': title.strip() or 'New chat',
-        'project_name': project_name,
-        'workspace_root': workspace_root.as_posix(),
-        'status': 'drafting',
-        'latest_review_id': None,
-        'latest_run_id': None,
-    }
-    _write_json(_session_meta_path(workspace_root, session_id), session)
-    _session_data_dir(workspace_root, session_id).mkdir(parents=True, exist_ok=True)
-    _session_messages_path(workspace_root, session_id).write_text('', encoding='utf-8', newline='\n')
-    return session
+    return _chat_session_repo(workspace_root).create_session(project_name, title=title)
 
 
 def _list_sessions(workspace_root: Path) -> list[dict[str, object]]:
@@ -852,25 +844,15 @@ def _list_sessions(workspace_root: Path) -> list[dict[str, object]]:
 
 def _load_session(workspace_root: Path, session_id: str) -> dict[str, object]:
     session_id = _validate_id(session_id, prefix='cs')
-    path = _session_meta_path(workspace_root, session_id)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail='session_not_found')
-    return _read_json(path)
+    repo = _chat_session_repo(workspace_root)
+    try:
+        return repo.load_session(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='session_not_found') from exc
 
 
 def _read_messages(workspace_root: Path, session_id: str) -> list[dict[str, object]]:
-    path = _session_messages_path(workspace_root, session_id)
-    if not path.exists():
-        return []
-    messages = []
-    for line in path.read_text(encoding='utf-8').splitlines():
-        if not line.strip():
-            continue
-        try:
-            messages.append(json.loads(line))
-        except Exception:
-            continue
-    return messages
+    return _chat_session_repo(workspace_root).read_messages(_validate_id(session_id, prefix='cs'))
 
 
 def _append_message(
@@ -883,33 +865,26 @@ def _append_message(
     kind: str = 'text',
     refs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    session = _load_session(workspace_root, session_id)
-    content = content.strip()
-    if not content:
-        raise HTTPException(status_code=400, detail='message_content_required')
-    if role not in {'user', 'assistant', 'system', 'tool'}:
-        raise HTTPException(status_code=400, detail='invalid_message_role')
-
-    message = {
-        'message_id': _new_id('msg'),
-        'created_at': _now_iso(),
-        'role': role,
-        'kind': kind,
-        'content': content,
-        'refs': refs or [],
-    }
-    path = _session_messages_path(workspace_root, session_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a', encoding='utf-8', newline='\n') as handle:
-        handle.write(json.dumps(message, ensure_ascii=False) + '\n')
-
-    session['updated_at'] = message['created_at']
-    if session.get('title') == 'New chat' and role == 'user':
-        session['title'] = content[:48]
-    session['project_name'] = project_name
-    session['workspace_root'] = workspace_root.as_posix()
-    _write_json(_session_meta_path(workspace_root, session_id), session)
-    return message
+    repo = _chat_session_repo(workspace_root)
+    session_id = _validate_id(session_id, prefix='cs')
+    try:
+        return repo.append_message(
+            session_id,
+            project_name=project_name,
+            role=role,
+            content=content,
+            kind=kind,
+            refs=refs,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == 'message_content_required':
+            raise HTTPException(status_code=400, detail=message) from exc
+        if message == 'invalid_message_role':
+            raise HTTPException(status_code=400, detail=message) from exc
+        raise
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='session_not_found') from exc
 
 
 def _session_detail(workspace_root: Path, session_id: str) -> dict[str, object]:
@@ -1239,7 +1214,7 @@ def _generate_planpack(
     base_settings = get_settings()
     settings = base_settings.model_copy(update={'workspace_root': workspace_root})
     memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
+    registry = build_default_operations()
     selected_brain = brain_name or settings.resolved_plan_brain
     summary = build_project_summary(workspace_root)
     summary_text = render_project_summary(summary) if summary else None
@@ -1288,50 +1263,16 @@ def _generate_planpack(
     return pack, out_path
 
 
-def _generate_chat_reply(workspace_root: Path, messages: list[dict[str, object]], *, brain_name: str | None = None) -> str:
+def _generate_chat_reply(session: ChatSession, *, brain_name: str | None = None) -> str:
     base_settings = get_settings()
-    settings = base_settings.model_copy(update={'workspace_root': workspace_root})
-    selected_brain = brain_name or settings.resolved_chat_brain
-    memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
-
-    summary = build_project_summary(workspace_root)
-    summary_text = render_project_summary(summary) if summary else None
-
-    agent = Agent(
-        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'chat_model', None)),
-        settings=settings,
-        registry=registry,
-        memory=memory,
-        mode='plan',
-        brain_name=selected_brain,
-        project_summary=summary_text,
+    service = ChatSessionService(base_settings)
+    result = service.generate_reply_for_session(
+        session,
+        brain_name=brain_name,
+        fallback_brain_name=base_settings.resolved_chat_brain,
+        expose_tool_output=False,
     )
-    agent.expose_tool_output = False
-    if hasattr(agent.brain, 'tool_choice'):
-        setattr(agent.brain, 'tool_choice', 'auto')
-
-    for msg in messages[-20:]:
-        role = str(msg.get('role', ''))
-        if role not in {'user', 'assistant'}:
-            continue
-        content = str(msg.get('content', '')).strip()
-        if content:
-            agent.conversation.append({'role': role, 'content': content})
-
-    last_user_msg = ''
-    for m in reversed(messages):
-        if str(m.get('role', '')) == 'user':
-            last_user_msg = str(m.get('content', '')).strip()
-            break
-
-    enriched_message = last_user_msg
-    scout_context = build_chat_scout_context(workspace_root, last_user_msg) if last_user_msg else None
-    if scout_context:
-        enriched_message = f'{last_user_msg}\n\n--- Relevant project context (auto-scanned) ---\n{scout_context}'
-
-    agent.conversation.append({'role': 'user', 'content': enriched_message})
-    return agent._agentic_loop()
+    return result.reply_text
 
 
 def _create_plan_review(
@@ -1882,7 +1823,7 @@ def _secondary_page(
   <body>
     <main class="page">
       <nav class="topbar">
-        <button class="burger" id="burger-btn" aria-label="菜单">☰</button>
+        <button class="burger" id="burger-btn" aria-label="菜单">?</button>
         <span class="brand">Godotter</span>
         <div class="gtabs-desktop">
           <a class="tab{' active' if current == 'Projects' else ''}" href="/projects">Projects</a>
@@ -1894,7 +1835,7 @@ def _secondary_page(
         <div class="nav-sidebar">
           <div class="nav-sidebar-head">
             <span>Godotter</span>
-            <button class="nav-sidebar-close" id="nav-close">✕</button>
+            <button class="nav-sidebar-close" id="nav-close">?</button>
           </div>
           <nav class="nav-sidebar-links">
             <a href="/"{' class="active"' if current == 'Workspace' else ''}>Workspace</a>
@@ -2484,14 +2425,15 @@ async def project_session_message_create(name: str, session_id: str, request: Re
 async def project_session_reply_create(name: str, session_id: str, request: Request) -> dict[str, object]:
     _require_token_if_configured(request)
     root = _project_root_or_404(name)
-    _load_session(root, session_id)
+    repo = _chat_session_repo(root)
+    session = repo.load_session(_validate_id(session_id, prefix='cs'))
     try:
         payload = await request.json()
     except Exception:
         payload = {}
     brain_name = str(payload.get('brain') or '').strip() or None
     try:
-        reply_text = _generate_chat_reply(root, _read_messages(root, session_id), brain_name=brain_name)
+        reply_text = _generate_chat_reply(session, brain_name=brain_name)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f'chat_reply_failed: {type(exc).__name__}: {exc}') from exc
     message = _append_message(
@@ -2502,6 +2444,7 @@ async def project_session_reply_create(name: str, session_id: str, request: Requ
         content=reply_text,
         kind='chat_reply',
     )
+    repo.save_session(session)
     return {
         'ok': True,
         'message': message,
@@ -3095,7 +3038,7 @@ def settings_page(request: Request) -> str:
             ];
             status.textContent = '';
             body.innerHTML = rows.map((r) => {
-              const ok = r[2] ? '<span style=\"color:#34d399\">✓</span>' : '<span style=\"color:#f59e0b\">✗</span>';
+              const ok = r[2] ? '<span style=\"color:#34d399\">?</span>' : '<span style=\"color:#f59e0b\">?</span>';
               const setBtn = ['安卓SDK','JDK','Keystore'].includes(r[0])
                 ? `<button class=\"env-set-btn\" data-key=\"GODOTTER_ANDROID_${r[0]=='Keystore'?'KEYSTORE':'SDK'}_PATH\" style=\"font-size:0.7rem\">设置</button>`
                 : '';
