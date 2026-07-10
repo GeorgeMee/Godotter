@@ -3,7 +3,7 @@ import subprocess
 
 from typer.testing import CliRunner
 
-from godotter.interfaces.cli import app
+from godotter.interfaces.commands.tasking import app
 
 
 runner = CliRunner()
@@ -24,7 +24,7 @@ def test_task_scout_finds_relevant_files(monkeypatch, tmp_path):
     (tmp_path / 'src' / 'inventory.py').write_text('class InventoryMgr: pass', encoding='utf-8')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -66,7 +66,7 @@ def test_task_scout_prioritizes_git_changed_files(monkeypatch, tmp_path):
     (tmp_path / 'src' / 'notes.txt').write_text('todo\n', encoding='utf-8')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),

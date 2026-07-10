@@ -3,7 +3,7 @@ import subprocess
 
 from typer.testing import CliRunner
 
-from godotter.interfaces.cli import app, _record_failure_verify_report, _rewrite_verification_command
+from godotter.interfaces.commands.tasking import app, _record_failure_verify_report, _rewrite_verification_command
 from godotter.tasks.runstate import load_runstate
 from godotter.tasks.workpack import WorkPack, WorkPackFileRef, write_workpack
 
@@ -35,7 +35,7 @@ def test_record_failure_verify_report_does_not_return_stale_latest(monkeypatch, 
         encoding='utf-8',
     )
     monkeypatch.setattr(
-        'godotter.interfaces.cli.run_verify',
+        'godotter.interfaces.commands.tasking.run_verify',
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('verify unavailable')),
     )
 
@@ -59,7 +59,7 @@ def _init_git_repo(path: Path) -> None:
 
 def test_task_prepare_writes_workpack_and_list_show(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -103,7 +103,7 @@ def test_task_run_uses_workpack_workspace_root(monkeypatch, tmp_path):
     workpack_path = write_workpack(pack_root, workpack, filename='manual.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -130,11 +130,11 @@ def test_task_run_uses_workpack_workspace_root(monkeypatch, tmp_path):
         )(),
     )
 
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -143,7 +143,7 @@ def test_task_run_uses_workpack_workspace_root(monkeypatch, tmp_path):
         def handle_input(self, prompt):
             return f'workspace_root={self.settings.workspace_root.as_posix()}'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path)])
     assert result.exit_code == 0
@@ -165,7 +165,7 @@ def test_task_show_prints_assumptions_and_relevant_files(monkeypatch, tmp_path):
     write_workpack(tmp_path, workpack, filename='show.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -198,7 +198,7 @@ def test_task_run_maps_deprecated_code_mode_to_act(monkeypatch, tmp_path):
     workpack_path = write_workpack(tmp_path, workpack, filename='mode.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -224,11 +224,11 @@ def test_task_run_maps_deprecated_code_mode_to_act(monkeypatch, tmp_path):
             },
         )(),
     )
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -239,7 +239,7 @@ def test_task_run_maps_deprecated_code_mode_to_act(monkeypatch, tmp_path):
             (self.settings.workspace_root / 'notes.txt').write_text('changed\n', encoding='utf-8')
             return f'mode={self.mode}'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'code'])
     assert result.exit_code == 0
@@ -258,7 +258,7 @@ def test_task_run_act_fails_without_workspace_changes(monkeypatch, tmp_path):
     workpack_path = write_workpack(tmp_path, workpack, filename='no_changes.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -284,11 +284,11 @@ def test_task_run_act_fails_without_workspace_changes(monkeypatch, tmp_path):
             },
         )(),
     )
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -297,7 +297,7 @@ def test_task_run_act_fails_without_workspace_changes(monkeypatch, tmp_path):
         def handle_input(self, prompt):
             return 'no changes'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 1
@@ -316,7 +316,7 @@ def test_task_run_act_requires_tests_and_level_updates(monkeypatch, tmp_path):
     workpack_path = write_workpack(tmp_path, workpack, filename='partial.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -342,11 +342,11 @@ def test_task_run_act_requires_tests_and_level_updates(monkeypatch, tmp_path):
             },
         )(),
     )
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -357,7 +357,7 @@ def test_task_run_act_requires_tests_and_level_updates(monkeypatch, tmp_path):
             feature_path.write_text('extends Node\n', encoding='utf-8')
             return 'partial changes'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 1
@@ -378,7 +378,7 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
     workpack_path = write_workpack(tmp_path, workpack, filename='complete.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -404,11 +404,11 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
             },
         )(),
     )
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -424,7 +424,7 @@ def test_task_run_act_passes_with_game_tests_and_level_updates(monkeypatch, tmp_
             (self.settings.workspace_root / 'tests' / 'levels' / 'main_smoke.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
             return 'complete changes'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 0
@@ -453,7 +453,7 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
     workpack_path = write_workpack(tmp_path, workpack, filename='verify.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -479,11 +479,11 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
             },
         )(),
     )
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -499,7 +499,7 @@ def test_task_run_act_executes_verification_commands(monkeypatch, tmp_path):
             (self.settings.workspace_root / 'tests' / 'levels' / 'main_smoke.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
             return 'complete changes'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 0
@@ -522,7 +522,7 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
     workpack_path = write_workpack(tmp_path, workpack, filename='verify_fail.json')
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -548,11 +548,11 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
             },
         )(),
     )
-    monkeypatch.setattr('godotter.interfaces.cli.configure_logging', lambda settings: None)
-    monkeypatch.setattr('godotter.interfaces.cli.Memory', lambda path: object())
-    monkeypatch.setattr('godotter.interfaces.cli.ToolRegistry', lambda tools: object())
-    monkeypatch.setattr('godotter.interfaces.cli.build_default_tools', lambda: [])
-    monkeypatch.setattr('godotter.interfaces.cli.create_brain', lambda settings, selected_brain, **kwargs: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.configure_logging', lambda settings: None)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Memory', lambda path: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.OperationRegistry', lambda operations: object())
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.build_default_operations', lambda: [])
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.create_brain', lambda settings, selected_brain, **kwargs: object())
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -568,7 +568,7 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
             (self.settings.workspace_root / 'tests' / 'levels' / 'main_smoke.tscn').write_text('[gd_scene format=3]\n', encoding='utf-8')
             return 'complete changes'
 
-    monkeypatch.setattr('godotter.interfaces.cli.Agent', FakeAgent)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.Agent', FakeAgent)
 
     result = runner.invoke(app, ['task', 'run', '--workpack', str(workpack_path), '--mode', 'act'])
     assert result.exit_code == 1
@@ -579,4 +579,3 @@ def test_task_run_act_fails_on_verification_command_error(monkeypatch, tmp_path)
     assert state.attempts[0].status == 'fail'
     assert state.attempts[0].failure_report is not None
     assert state.attempts[0].verify_report is not None
-

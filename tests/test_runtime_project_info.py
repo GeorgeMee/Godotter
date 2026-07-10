@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from godotter.runtime import load_project_info
+from godotter.services.godot import load_project_info
 
 
 def test_load_project_info_reads_main_scene_and_counts(tmp_path: Path):

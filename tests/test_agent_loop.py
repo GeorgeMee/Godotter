@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
@@ -6,7 +6,7 @@ from godotter.agent import Agent
 from godotter.config import Settings
 from godotter.context import Memory
 from godotter.llm import StubBrain, Thought, ToolCall
-from godotter.tools import ToolRegistry, build_default_tools
+from godotter.operations import OperationRegistry, build_default_operations
 
 
 @dataclass
@@ -56,7 +56,7 @@ def build_agent(tmp_path, mode: str = 'plan', godot_path: str | None = None) -> 
         values['GODOT_PATH'] = godot_path
     settings = Settings(**values)
     memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
+    registry = build_default_operations()
     return Agent(StubBrain(), settings=settings, registry=registry, memory=memory, mode=mode)
 
 
@@ -89,18 +89,19 @@ def test_read_file_tool_flow_key_value(tmp_path):
     assert '2 | beta' in result
 
 
-def test_memory_tool_flow(tmp_path):
+def test_memory_is_context_not_tool(tmp_path):
     agent = build_agent(tmp_path)
     result = agent.handle_input('remember preferred mode is command-first')
-    assert 'Memory updated.' in result
-    assert 'preferred mode is command-first' in agent.memory.content
+    assert 'save_memory' not in result
+    assert agent.memory is not None
+    assert 'preferred mode is command-first' not in agent.memory.content
 
 
 def test_generate_patch_tool_flow(tmp_path):
     sample = tmp_path / 'sample.txt'
     sample.write_text('alpha\nbeta\n', encoding='utf-8')
     agent = build_agent(tmp_path)
-    result = agent.handle_input('tool generate_patch path=sample.txt old_text=beta new_text=gamma')
+    result = agent.handle_input('tool generate_text_replace_patch path=sample.txt old_text=beta new_text=gamma')
     assert '--- a/sample.txt' in result
     assert '+++ b/sample.txt' in result
     assert '+gamma' in result
@@ -111,7 +112,7 @@ def test_apply_patch_tool_flow_requires_act_mode(tmp_path):
     sample.write_text('alpha\nbeta\n', encoding='utf-8')
     agent = build_agent(tmp_path)
     patch = '--- a/sample.txt\n+++ b/sample.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n'
-    result = agent.handle_input(f'tool apply_patch patch={patch!r}')
+    result = agent.handle_input(f'tool apply_unified_patch patch={patch!r}')
     assert 'not available in plan mode' in result
 
 
@@ -120,9 +121,42 @@ def test_apply_patch_tool_flow_act_mode(tmp_path):
     sample.write_text('alpha\nbeta\n', encoding='utf-8')
     agent = build_agent(tmp_path, mode='act')
     patch = '--- a/sample.txt\n+++ b/sample.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n'
-    result = agent.handle_input(f'tool apply_patch patch={patch!r}')
+    result = agent.handle_input(f'tool apply_unified_patch patch={patch!r}')
     assert 'Applied patch to: sample.txt' in result
     assert sample.read_text(encoding='utf-8') == 'alpha\ngamma\n'
+
+
+def test_replace_text_tool_flow_act_mode(tmp_path):
+    sample = tmp_path / 'sample.txt'
+    sample.write_text('alpha\nbeta\n', encoding='utf-8')
+    agent = build_agent(tmp_path, mode='act')
+    result = agent.handle_input('tool replace_text path=sample.txt old_text=beta new_text=gamma')
+    assert 'Applied patch to: sample.txt' in result
+    assert sample.read_text(encoding='utf-8') == 'alpha\ngamma\n'
+
+
+def test_write_tool_records_operation(tmp_path):
+    sample = tmp_path / 'sample.txt'
+    sample.write_text('alpha\nbeta\n', encoding='utf-8')
+    recorded = []
+
+    agent = build_agent(tmp_path, mode='act')
+    agent.operation_recorder = lambda record: recorded.append(record)
+
+    result = agent._execute_tool('replace_text', {'path': 'sample.txt', 'old_text': 'beta', 'new_text': 'gamma'})
+
+    assert 'Applied patch to: sample.txt' in result
+    assert recorded
+    assert recorded[0]['tool_name'] == 'replace_text'
+    assert recorded[0]['args']['path'] == 'sample.txt'
+    assert 'Applied patch to: sample.txt' in recorded[0]['result_text']
+    assert recorded[0]['affected_paths'] == ['sample.txt']
+    assert recorded[0]['before_hash']['sample.txt'] is not None
+    assert recorded[0]['after_hash']['sample.txt'] is not None
+    assert '--- a/sample.txt' in recorded[0]['forward_patch']
+    assert '+++ b/sample.txt' in recorded[0]['forward_patch']
+    assert '--- a/sample.txt' in recorded[0]['inverse_patch']
+    assert '+beta' in recorded[0]['inverse_patch']
 
 
 def test_validate_project_reports_scaffold(tmp_path):
@@ -151,21 +185,10 @@ def test_project_info_tool_flow(tmp_path):
     assert 'script_count=1' in result
 
 
-def test_scene_create_requires_act_mode(tmp_path):
+def test_scene_create_is_not_an_agent_tool(tmp_path):
     agent = build_agent(tmp_path)
     result = agent.handle_input('tool scene_create path=scenes/main.tscn root_type=Node2D')
-    assert 'not available in plan mode' in result
-
-
-def test_scene_create_tool_flow_act_mode(tmp_path):
-    agent = build_agent(tmp_path, mode='act')
-    result = agent.handle_input('tool scene_create path=scenes/main_menu.tscn root_type=Node2D root_name=MainMenu')
-    scene_path = tmp_path / 'scenes' / 'main_menu.tscn'
-    assert 'path=scenes/main_menu.tscn' in result
-    assert 'root_name=MainMenu' in result
-    content = scene_path.read_text(encoding='utf-8')
-    assert '[gd_scene format=3 uid="uid://' in content
-    assert '[node name="MainMenu" type="Node2D"]' in content
+    assert "Error: Tool 'scene_create' not found" in result
 
 
 def test_scene_inspect_tool_flow(tmp_path):
@@ -208,7 +231,7 @@ def test_script_lint_requires_godot_path(monkeypatch, tmp_path):
 
 
 def test_script_lint_tool_flow(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.tools.runtime.GodotRunner', FakeGodotRunner)
+    monkeypatch.setattr('godotter.services.godot.analysis.GodotRunner', FakeGodotRunner)
     script_path = tmp_path / 'scripts' / 'player.gd'
     script_path.parent.mkdir()
     script_path.write_text('extends Node\n', encoding='utf-8')
@@ -226,7 +249,7 @@ def test_headless_run_requires_act_mode(tmp_path):
 
 
 def test_headless_run_tool_flow_act_mode(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.tools.runtime.GodotRunner', FakeGodotRunner)
+    monkeypatch.setattr('godotter.services.godot.run.GodotRunner', FakeGodotRunner)
     agent = build_agent(tmp_path, mode='act', godot_path='/usr/bin/godot')
     result = agent.handle_input('tool headless_run scene=res://scenes/main.tscn timeout=15')
     assert 'command=headless_run' in result
@@ -236,7 +259,7 @@ def test_headless_run_tool_flow_act_mode(monkeypatch, tmp_path):
 
 def test_runtime_doctor_tool_flow(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.tools.runtime.run_doctor',
+        'godotter.services.godot.diagnostics.run_doctor',
         lambda workspace_root, godot_path, timeout=15: FakeDoctorReport(workspace_root=workspace_root),
     )
     agent = build_agent(tmp_path)
@@ -246,13 +269,35 @@ def test_runtime_doctor_tool_flow(monkeypatch, tmp_path):
     assert 'godot_version=Godot Engine v4.4.stable' in result
 
 
-def test_uid_fix_requires_act_mode(tmp_path):
+def test_uid_fix_apply_requires_act_mode(tmp_path):
     agent = build_agent(tmp_path)
-    result = agent.handle_input('tool uid_fix dry_run=false')
+    result = agent.handle_input('tool uid_fix_apply {}')
     assert 'not available in plan mode' in result
 
 
-def test_uid_fix_tool_flow_act_mode(tmp_path):
+def test_uid_scan_reports_without_writing(tmp_path):
+    script_path = tmp_path / 'scripts' / 'player.gd'
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text('extends Node\n', encoding='utf-8')
+    (tmp_path / 'scripts' / 'player.gd.uid').write_text('uid://player123\n', encoding='utf-8')
+    scene_path = tmp_path / 'scenes' / 'main.tscn'
+    scene_path.parent.mkdir(parents=True)
+    scene_path.write_text(
+        '[gd_scene load_steps=2 format=3 uid="uid://scene1"]\n\n'
+        '[ext_resource type="Script" uid="uid://player123" path="res://old/player.gd" id="1_script"]\n\n'
+        '[node name="Main" type="Node2D"]\n'
+        'script = ExtResource("1_script")\n',
+        encoding='utf-8',
+    )
+    agent = build_agent(tmp_path)
+    result = agent.handle_input('tool uid_scan {}')
+    assert 'dry_run=true' in result
+    assert 'updated_files=1' in result
+    assert 'change file=scenes/main.tscn uid=uid://player123 old_path=res://old/player.gd new_path=res://scripts/player.gd' in result
+    assert 'path="res://old/player.gd"' in scene_path.read_text(encoding='utf-8')
+
+
+def test_uid_fix_apply_tool_flow_act_mode(tmp_path):
     script_path = tmp_path / 'scripts' / 'player.gd'
     script_path.parent.mkdir(parents=True)
     script_path.write_text('extends Node\n', encoding='utf-8')
@@ -267,7 +312,8 @@ def test_uid_fix_tool_flow_act_mode(tmp_path):
         encoding='utf-8',
     )
     agent = build_agent(tmp_path, mode='act')
-    result = agent.handle_input('tool uid_fix dry_run=false')
+    result = agent.handle_input('tool uid_fix_apply {}')
+    assert 'dry_run=false' in result
     assert 'updated_files=1' in result
     assert 'change file=scenes/main.tscn uid=uid://player123 old_path=res://old/player.gd new_path=res://scripts/player.gd' in result
     updated = scene_path.read_text(encoding='utf-8')
@@ -329,7 +375,7 @@ def test_agent_preserves_reasoning_content_on_assistant_messages(tmp_path):
     }
     settings = Settings(**values)
     memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
+    registry = build_default_operations()
     agent = Agent(ReasoningBrain(), settings=settings, registry=registry, memory=memory, mode='plan')
 
     agent.handle_input('inspect repo')
@@ -346,7 +392,7 @@ def test_agent_project_summary_in_system_prompt(tmp_path):
     }
     settings = Settings(**values)
     memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
+    registry = build_default_operations()
     summary_text = 'Project: TestGame\nWorkspace: /tmp/test\nMain scene: res://main.tscn'
     agent = Agent(
         StubBrain(),
@@ -368,7 +414,7 @@ def test_agent_plan_mode_prompt_encourages_tool_use(tmp_path):
     }
     settings = Settings(**values)
     memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
+    registry = build_default_operations()
     agent = Agent(StubBrain(), settings=settings, registry=registry, memory=memory, mode='plan')
     assert 'ALWAYS use tools first' in agent.brain.system_prompt
     assert 'inspect the actual code' in agent.brain.system_prompt
@@ -381,7 +427,7 @@ def test_agent_without_project_summary(tmp_path):
     }
     settings = Settings(**values)
     memory = Memory(settings.resolved_memory_path)
-    registry = ToolRegistry(build_default_tools())
+    registry = build_default_operations()
     agent = Agent(StubBrain(), settings=settings, registry=registry, memory=memory, mode='plan')
     assert agent.project_summary is None
     assert 'Current mode: plan.' in agent.brain.system_prompt

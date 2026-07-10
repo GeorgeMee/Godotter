@@ -1,4 +1,4 @@
-﻿from godotter.runtime.scene_parser import atomic_write
+from godotter.services.godot.scene_parser import atomic_write
 from godotter.utils.textio import write_text_utf8
 
 

@@ -1,4 +1,4 @@
-﻿from godotter.runtime.uid_tools import fix_uid_paths, scan_uid_map
+from godotter.services.godot.uid_tools import fix_uid_paths, scan_uid_map
 
 
 def test_scan_uid_map_reads_uid_files(tmp_path):

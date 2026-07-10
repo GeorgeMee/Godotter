@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from godotter.runtime import filename_to_node_name, generate_minimal_scene, generate_uid, parse_scene_header, parse_scene_text
+from godotter.services.godot import filename_to_node_name, generate_minimal_scene, generate_uid, parse_scene_header, parse_scene_text
 
 
 def test_generate_uid_has_expected_prefix():

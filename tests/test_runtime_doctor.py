@@ -1,8 +1,8 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
-from godotter.runtime.doctor import run_doctor
+from godotter.services.godot.doctor import run_doctor
 
 
 @dataclass

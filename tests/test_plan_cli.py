@@ -3,7 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from godotter.interfaces.cli import app
+from godotter.interfaces.commands.tasking import app
 from godotter.tasks.workpack import load_workpack
 
 
@@ -12,7 +12,7 @@ runner = CliRunner()
 
 def test_plan_prepare_list_show_status(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -31,7 +31,7 @@ def test_plan_prepare_list_show_status(monkeypatch, tmp_path):
 
     # Make stub return valid plan JSON.
     monkeypatch.setattr(
-        'godotter.interfaces.cli.Agent.handle_input',
+        'godotter.interfaces.commands.tasking.Agent.handle_input',
         lambda self, prompt: json.dumps(
             {
                 'tasks': [
@@ -78,7 +78,7 @@ def test_plan_prepare_list_show_status(monkeypatch, tmp_path):
 
 def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -97,7 +97,7 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
 
     # Prepare a plan with reversed order but dependency t1 -> t2.
     monkeypatch.setattr(
-        'godotter.interfaces.cli.Agent.handle_input',
+        'godotter.interfaces.commands.tasking.Agent.handle_input',
         lambda self, prompt: json.dumps(
             {
                 'tasks': [
@@ -144,7 +144,7 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
     ):
         calls.append(str(workpack))
 
-    monkeypatch.setattr('godotter.interfaces.cli.task_run_command', _fake_task_run_command)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.task_run_command', _fake_task_run_command)
 
     run_result = runner.invoke(app, ['plan', 'run', '--latest'])
     assert run_result.exit_code == 0
@@ -156,7 +156,7 @@ def test_plan_run_orders_by_dependencies(monkeypatch, tmp_path):
 
 def test_plan_run_injects_scope_specific_test_verification(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -173,7 +173,7 @@ def test_plan_run_injects_scope_specific_test_verification(monkeypatch, tmp_path
         )(),
     )
     monkeypatch.setattr(
-        'godotter.interfaces.cli.Agent.handle_input',
+        'godotter.interfaces.commands.tasking.Agent.handle_input',
         lambda self, prompt: json.dumps(
             {
                 'tasks': [
@@ -211,7 +211,7 @@ def test_plan_run_injects_scope_specific_test_verification(monkeypatch, tmp_path
     ):
         captured.append(str(workpack))
 
-    monkeypatch.setattr('godotter.interfaces.cli.task_run_command', _fake_task_run_command)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.task_run_command', _fake_task_run_command)
 
     run_result = runner.invoke(app, ['plan', 'run', '--latest'])
 
@@ -222,7 +222,7 @@ def test_plan_run_injects_scope_specific_test_verification(monkeypatch, tmp_path
 
 def test_plan_run_failed_task_records_latest_verify_report(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -239,7 +239,7 @@ def test_plan_run_failed_task_records_latest_verify_report(monkeypatch, tmp_path
         )(),
     )
     monkeypatch.setattr(
-        'godotter.interfaces.cli.Agent.handle_input',
+        'godotter.interfaces.commands.tasking.Agent.handle_input',
         lambda self, prompt: json.dumps(
             {
                 'tasks': [
@@ -277,7 +277,7 @@ def test_plan_run_failed_task_records_latest_verify_report(monkeypatch, tmp_path
         (report_dir / 'latest.json').write_text('{"report_id":"vr_test","result":"fail"}\n', encoding='utf-8')
         raise RuntimeError('verification failed')
 
-    monkeypatch.setattr('godotter.interfaces.cli.task_run_command', _fake_task_run_command)
+    monkeypatch.setattr('godotter.interfaces.commands.tasking.task_run_command', _fake_task_run_command)
 
     run_result = runner.invoke(app, ['plan', 'run', '--latest'])
     assert run_result.exit_code != 0
@@ -290,7 +290,7 @@ def test_plan_run_failed_task_records_latest_verify_report(monkeypatch, tmp_path
 
 def test_plan_prepare_rejects_non_executable_tasks(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        'godotter.interfaces.cli.get_settings',
+        'godotter.interfaces.commands.tasking.get_settings',
         lambda: type(
             'S',
             (),
@@ -308,7 +308,7 @@ def test_plan_prepare_rejects_non_executable_tasks(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(
-        'godotter.interfaces.cli.Agent.handle_input',
+        'godotter.interfaces.commands.tasking.Agent.handle_input',
         lambda self, prompt: json.dumps(
             {
                 'tasks': [

@@ -3,8 +3,8 @@ import json
 
 from typer.testing import CliRunner
 
-from godotter.interfaces.cli import app
-from godotter.operations.tests import expected_test_dirs_for_paths, infer_test_kinds_for_paths
+from godotter.interfaces.commands.godot import app
+from godotter.services.project.scaffolding import expected_test_dirs_for_paths, infer_test_kinds_for_paths
 
 
 class FakeRunResult:
@@ -131,11 +131,11 @@ runner = CliRunner()
 
 
 def test_runtime_lint_command(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
     result = runner.invoke(app, ['runtime', 'lint', 'scripts/player.gd', '--timeout', '7'])
     assert result.exit_code == 0
     assert 'command=script_lint' in result.stdout
@@ -143,11 +143,11 @@ def test_runtime_lint_command(monkeypatch, tmp_path):
 
 
 def test_runtime_run_command(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
     result = runner.invoke(app, ['runtime', 'run', '--scene', 'res://scenes/main.tscn', '--timeout', '11'])
     assert result.exit_code == 0
     assert 'command=headless_run' in result.stdout
@@ -155,7 +155,7 @@ def test_runtime_run_command(monkeypatch, tmp_path):
 
 
 def test_runtime_command_requires_godot_path(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': None,
         'workspace_root': tmp_path,
         'resolved_project_registry_path': tmp_path / 'projects.toml',
@@ -167,12 +167,12 @@ def test_runtime_command_requires_godot_path(monkeypatch, tmp_path):
 
 
 def test_runtime_verify_writes_json_report(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(
-        'godotter.runtime.verify.subprocess.run',
+        'godotter.services.godot.verify.subprocess.run',
         lambda command, cwd, capture_output, timeout, shell: FakeCompletedProcess(stdout=f'ok:{command}'.encode()),
     )
 
@@ -190,17 +190,17 @@ def test_runtime_verify_writes_json_report(monkeypatch, tmp_path):
 
 
 def test_runtime_verify_failed_check_exits_nonzero(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
 
     def _fake_run(command, cwd, capture_output, timeout, shell):
         if 'validate-managers' in command:
             return FakeCompletedProcess(returncode=1, stderr=b'missing Managers')
         return FakeCompletedProcess()
 
-    monkeypatch.setattr('godotter.runtime.verify.subprocess.run', _fake_run)
+    monkeypatch.setattr('godotter.services.godot.verify.subprocess.run', _fake_run)
 
     result = runner.invoke(app, ['runtime', 'verify', '--json-output', '.godotter/reports/verify/fail.json'])
 
@@ -212,12 +212,12 @@ def test_runtime_verify_failed_check_exits_nonzero(monkeypatch, tmp_path):
 
 
 def test_runtime_doctor_command(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
-    monkeypatch.setattr('godotter.interfaces.cli.run_doctor', lambda workspace_root, godot_path, timeout=15: FakeDoctorReport(workspace_root))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.run_doctor', lambda workspace_root, godot_path, timeout=15: FakeDoctorReport(workspace_root))
     result = runner.invoke(app, ['runtime', 'doctor', '--timeout', '5'])
     assert result.exit_code == 0
     assert 'project_exists=true' in result.stdout
@@ -226,12 +226,12 @@ def test_runtime_doctor_command(monkeypatch, tmp_path):
 
 def test_runtime_uid_fix_command(monkeypatch, tmp_path):
     target = tmp_path / 'scenes' / 'main.tscn'
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
-    monkeypatch.setattr('godotter.interfaces.cli.fix_uid_paths', lambda workspace_root, dry_run=True: FakeUidFixResult(target))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.fix_uid_paths', lambda workspace_root, dry_run=True: FakeUidFixResult(target))
     result = runner.invoke(app, ['runtime', 'uid-fix', '--write'])
     assert result.exit_code == 0
     assert 'dry_run=false' in result.stdout
@@ -240,13 +240,13 @@ def test_runtime_uid_fix_command(monkeypatch, tmp_path):
 
 
 def test_export_build_command_writes_report_summary(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(
-        'godotter.interfaces.cli.run_export_build',
+        'godotter.interfaces.commands.godot.run_export_build',
         lambda **kwargs: (FakeBuildReport(), tmp_path / '.godotter' / 'builds' / 'build_demo' / 'build_report.json'),
     )
 
@@ -259,12 +259,12 @@ def test_export_build_command_writes_report_summary(monkeypatch, tmp_path):
 
 
 def test_export_list_command_lists_build_reports(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(
-        'godotter.interfaces.cli.list_build_reports',
+        'godotter.interfaces.commands.godot.list_build_reports',
         lambda workspace_root: [{'build_id': 'build_demo', 'status': 'passed', 'preset': 'Web', 'artifacts': [{}]}],
     )
 
@@ -276,16 +276,16 @@ def test_export_list_command_lists_build_reports(monkeypatch, tmp_path):
 
 
 def test_export_doctor_command_reports_presets_and_templates(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
         'export_templates_path': None,
         'android_sdk_path': None,
         'java_home': None,
         'android_keystore_path': None,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(
-        'godotter.interfaces.cli.run_export_doctor',
+        'godotter.interfaces.commands.godot.run_export_doctor',
         lambda **kwargs: FakeExportDoctorReport(tmp_path),
     )
 
@@ -299,16 +299,16 @@ def test_export_doctor_command_reports_presets_and_templates(monkeypatch, tmp_pa
 
 
 def test_export_doctor_command_fails_when_project_not_export_ready(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
         'export_templates_path': None,
         'android_sdk_path': None,
         'java_home': None,
         'android_keystore_path': None,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.resolve_runtime_target', lambda settings, project=None: FakeRuntimeTarget(tmp_path))
     monkeypatch.setattr(
-        'godotter.interfaces.cli.run_export_doctor',
+        'godotter.interfaces.commands.godot.run_export_doctor',
         lambda **kwargs: FakeExportDoctorReport(tmp_path, ok=False),
     )
 
@@ -320,7 +320,7 @@ def test_export_doctor_command_fails_when_project_not_export_ready(monkeypatch, 
 
 
 def test_runtime_lint_command_accepts_project_option(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
@@ -330,7 +330,7 @@ def test_runtime_lint_command_accepts_project_option(monkeypatch, tmp_path):
         captured['project'] = project
         return FakeGodotRunner(settings.godot_path, settings.workspace_root)
 
-    monkeypatch.setattr('godotter.interfaces.cli.build_runner', fake_build_runner)
+    monkeypatch.setattr('godotter.interfaces.commands.godot.build_runner', fake_build_runner)
     result = runner.invoke(app, ['runtime', 'lint', '--project', 'demo'])
     assert result.exit_code == 0
     assert captured['project'] == 'demo'
@@ -358,7 +358,7 @@ def test_runtime_validate_nodepaths_reports_unresolved_exported_path(monkeypatch
         ),
         encoding='utf-8',
     )
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -393,7 +393,7 @@ def test_runtime_validate_nodepaths_accepts_resolved_exported_path(monkeypatch, 
         ),
         encoding='utf-8',
     )
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -421,7 +421,7 @@ def test_runtime_validate_paths_reports_missing_scene_resource_with_suggestion(m
         ),
         encoding='utf-8',
     )
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -442,7 +442,7 @@ def test_runtime_validate_paths_reports_script_res_path_with_unique_suggestion(m
         'extends Node\nconst GameOver = preload("res://game/ui/scenes/game_over.tscn")\n',
         encoding='utf-8',
     )
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -476,7 +476,7 @@ def test_runtime_validate_paths_fix_rewrites_unique_nodepath_suggestion(monkeypa
         ),
         encoding='utf-8',
     )
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -503,7 +503,7 @@ def test_runtime_validate_paths_fix_rewrites_unique_script_res_path(monkeypatch,
         'extends Node\nconst GameOver = preload("res://game/ui/scenes/game_over.tscn")\n',
         encoding='utf-8',
     )
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -515,7 +515,7 @@ def test_runtime_validate_paths_fix_rewrites_unique_script_res_path(monkeypatch,
 
 
 def test_scaffold_test_command_scaffolds_e2e_harness(monkeypatch, tmp_path):
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'workspace_root': tmp_path,
     })())
 
@@ -543,11 +543,11 @@ def test_runtime_test_kind_uses_preset_patterns(monkeypatch, tmp_path):
     (tests_root / 'features' / 'pickup').mkdir(parents=True)
     (tests_root / 'systems' / 'inventory' / 'inventory_harness.tscn').write_text('', encoding='utf-8')
     (tests_root / 'features' / 'pickup' / 'pickup_harness.tscn').write_text('', encoding='utf-8')
-    monkeypatch.setattr('godotter.interfaces.cli.get_settings', lambda: type('S', (), {
+    monkeypatch.setattr('godotter.interfaces.commands.godot.get_settings', lambda: type('S', (), {
         'godot_path': '/usr/bin/godot',
         'workspace_root': tmp_path,
     })())
-    monkeypatch.setattr('godotter.interfaces.cli.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
+    monkeypatch.setattr('godotter.interfaces.commands.godot.build_runner', lambda settings, project=None: FakeGodotRunner(settings.godot_path, settings.workspace_root))
 
     result = runner.invoke(app, ['runtime', 'test', '--kind', 'system'])
 

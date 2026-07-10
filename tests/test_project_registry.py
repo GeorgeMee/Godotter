@@ -1,5 +1,5 @@
-﻿from godotter.config import Settings
-from godotter.project_registry import ProjectRegistryError, load_project_registry, resolve_runtime_target
+from godotter.config import Settings
+from godotter.services.project.registry import ProjectRegistryError, load_project_registry, resolve_runtime_target
 
 
 def test_load_project_registry_reads_projects(tmp_path):

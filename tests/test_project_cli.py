@@ -1,6 +1,6 @@
-﻿from typer.testing import CliRunner
+from typer.testing import CliRunner
 
-from godotter.interfaces.cli import app
+from godotter.interfaces.commands.godot import app
 
 
 runner = CliRunner()
