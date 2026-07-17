@@ -8,7 +8,7 @@ import typer
 from godotter.services.chat.session_types import ChatSession
 from godotter.config import Settings, get_settings
 from godotter.config.logging import configure_logging
-from godotter.services.chat import ChatSessionService
+from godotter.services.chat import ChatSessionRepository, ReplyService, SessionService
 from godotter.services.godot.cli_helpers import resolve_runtime_target
 
 
@@ -81,6 +81,16 @@ def chat_command(
         '--no-scout',
         help='Skip automatic workspace scouting (sends raw message only).',
     ),
+    save_session: bool = typer.Option(
+        False,
+        '--save-session',
+        help='Persist the chat session to .godotter/sessions.',
+    ),
+    session_id: str | None = typer.Option(
+        None,
+        '--session-id',
+        help='Resume or create a saved chat session.',
+    ),
 ) -> None:
     base_settings = get_settings()
     normalized_mode, mode_note = _normalize_cli_mode(mode)
@@ -88,20 +98,21 @@ def chat_command(
     configure_logging(settings)
     if mode_note:
         typer.echo(mode_note)
-    service = ChatSessionService(settings)
+    repository = ChatSessionRepository(root) if (save_session or session_id is not None) else None
+    session_service = SessionService(settings, repository)
+    reply_service = ReplyService(settings, session_service)
     if message is not None:
-        session = ChatSession(
-            session_id='tmp',
+        session = _build_session(
+            session_service=session_service,
             workspace_root=root,
             project_name=project or 'workspace',
+            session_id=session_id,
             title='Chat',
-            created_at='',
-            updated_at='',
-            messages=[{'role': 'user', 'content': message}],
             mode=normalized_mode,
             brain_name=brain or settings.default_brain,
+            initial_message=message,
         )
-        result = service.generate_reply_for_session(
+        result = reply_service.generate_reply_for_session(
             session,
             brain_name=brain,
             fallback_brain_name=settings.default_brain,
@@ -111,7 +122,8 @@ def chat_command(
         return
 
     _run_chat_interactive(
-        service=service,
+        session_service=session_service,
+        reply_service=reply_service,
         workspace_root=root,
         project=project,
         brain=brain,
@@ -119,12 +131,15 @@ def chat_command(
         default_brain=settings.default_brain,
         mode=normalized_mode,
         no_scout=no_scout,
+        repository=repository,
+        session_id=session_id,
     )
 
 
 def _run_chat_interactive(
     *,
-    service: ChatSessionService,
+    session_service: SessionService,
+    reply_service: ReplyService,
     workspace_root: Path,
     project: str | None,
     brain: str | None,
@@ -132,19 +147,21 @@ def _run_chat_interactive(
     default_brain: str,
     mode: str,
     no_scout: bool,
+    repository: ChatSessionRepository | None,
+    session_id: str | None,
 ) -> None:
-    session = ChatSession(
-        session_id='tmp',
+    session = _build_session(
+        session_service=session_service,
         workspace_root=workspace_root,
         project_name=project or 'workspace',
+        session_id=session_id,
         title='Chat',
-        created_at='',
-        updated_at='',
-        messages=[],
         mode=mode,
         brain_name=brain or default_brain,
     )
     current_mode = mode
+    if repository is not None:
+        typer.echo(f'session_id={session.session_id}')
     typer.echo('Interactive chat. Use /mode plan|act to switch mode, /q to quit.')
     while True:
         try:
@@ -158,7 +175,7 @@ def _run_chat_interactive(
             break
         if user_input in {'/rollback', '/undo'}:
             try:
-                rollback = service.rollback_last_operation(session)
+                rollback = session_service.rollback_last_operation(session)
                 typer.echo(
                     f"rollback={rollback['tool_name']} target={rollback['args'].get('target_tool_name', '')} "
                     f"paths={', '.join(rollback.get('affected_paths') or []) or '(none)'}"
@@ -171,9 +188,12 @@ def _run_chat_interactive(
             typer.echo(f'mode={current_mode}')
             continue
 
-        session.messages.append({'role': 'user', 'content': user_input})
         session.mode = current_mode
-        result = service.generate_reply_for_session(
+        if repository is not None:
+            session_service.append_message(session, role='user', content=user_input)
+        else:
+            session.messages.append({'role': 'user', 'content': user_input})
+        result = reply_service.generate_reply_for_session(
             session,
             brain_name=brain,
             fallback_brain_name=fallback_brain_name,
@@ -181,3 +201,34 @@ def _run_chat_interactive(
         )
         typer.echo(result.reply_text)
         session.messages = list(result.conversation)
+
+
+def _build_session(
+    *,
+    session_service: SessionService,
+    workspace_root: Path,
+    project_name: str,
+    session_id: str | None,
+    title: str,
+    mode: str,
+    brain_name: str,
+    initial_message: str | None = None,
+) -> ChatSession:
+    session = session_service.load_or_create_session(
+        project_name,
+        session_id=session_id,
+        title=title,
+        workspace_root=workspace_root,
+        mode=mode,
+        brain_name=brain_name,
+    )
+    session.workspace_root = workspace_root
+    session.project_name = project_name
+    session.mode = mode
+    session.brain_name = brain_name
+    if initial_message is not None:
+        if session_service.has_repository:
+            session_service.append_message(session, role='user', content=initial_message)
+        else:
+            session.messages.append({'role': 'user', 'content': initial_message})
+    return session

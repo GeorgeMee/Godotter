@@ -1,152 +1,187 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 import secrets
 from pathlib import Path
 from typing import Any
 
-from godotter.agent import Agent
 from godotter.config import Settings, get_settings
-from godotter.context import Memory, build_chat_scout_context, build_project_summary, render_project_summary
-from godotter.llm import create_brain
-from godotter.operations import build_default_operations
-from godotter.services.project.patches import PatchService
-from godotter.services.chat.session_types import ChatSession
 from godotter.services.chat.session_repository import ChatSessionRepository
+from godotter.services.chat.session_types import ChatSession
+from godotter.services.project.patches import PatchService
 
 
-@dataclass(slots=True)
-class ChatReplyResult:
-    reply_text: str
-    conversation: list[dict[str, Any]]
-    workspace_root: Path
-    brain_name: str
-    mode: str
-    user_message: str
-    enriched_message: str
-
-
-class ChatSessionService:
+class SessionService:
     def __init__(self, settings: Settings | None = None, repository: ChatSessionRepository | None = None) -> None:
         self._base_settings = settings or get_settings()
         self._repository = repository
 
-    def _copy_settings(self, base: Settings, **overrides: Any) -> Settings:
-        try:
-            return base.model_copy(update=overrides)
-        except AttributeError:
-            return base
+    @property
+    def has_repository(self) -> bool:
+        return self._repository is not None
 
-    def build_agent(
+    def _require_repository(self) -> ChatSessionRepository:
+        if self._repository is None:
+            raise ValueError('ChatSessionRepository is required for persisted session operations.')
+        return self._repository
+
+    def _default_workspace_root(self, workspace_root: Path | None = None) -> Path:
+        if workspace_root is not None:
+            return workspace_root.resolve()
+        return Path(getattr(self._base_settings, 'workspace_root', Path('.'))).resolve()
+
+    def save_session(self, session: ChatSession) -> ChatSession:
+        if self._repository is not None:
+            self._repository.save_session(session)
+        return session
+
+    def create_session(
         self,
+        project_name: str,
         *,
-        workspace_root: Path,
-        brain_name: str | None = None,
-        fallback_brain_name: str | None = None,
+        title: str = 'Chat',
+        session_id: str | None = None,
+        workspace_root: Path | None = None,
+        status: str = 'drafting',
         mode: str = 'plan',
-        operation_recorder: Callable[[dict[str, Any]], None] | None = None,
-    ) -> tuple[Agent, Settings, str]:
-        settings = self._copy_settings(self._base_settings, workspace_root=workspace_root.resolve())
-        default_brain = getattr(settings, 'resolved_chat_brain', getattr(settings, 'default_brain', 'stub'))
-        selected_brain = brain_name or fallback_brain_name or default_brain
-        memory = Memory(settings.resolved_memory_path)
-        registry = build_default_operations()
-
-        summary = build_project_summary(workspace_root)
-        summary_text = render_project_summary(summary) if summary else None
-
-        agent = Agent(
-            brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'chat_model', None)),
-            settings=settings,
-            registry=registry,
-            memory=memory,
-            mode=mode,
-            brain_name=selected_brain,
-            project_summary=summary_text,
-            operation_recorder=operation_recorder,
-        )
-        return agent, settings, selected_brain
-
-    def generate_reply(
-        self,
-        *,
-        workspace_root: Path,
-        messages: list[dict[str, object]],
         brain_name: str | None = None,
-        fallback_brain_name: str | None = None,
-        mode: str = 'plan',
-        no_scout: bool = False,
-        expose_tool_output: bool = True,
-        history_limit: int = 20,
-        operation_recorder: Callable[[dict[str, Any]], None] | None = None,
-    ) -> ChatReplyResult:
-        agent, _settings, selected_brain = self.build_agent(
-            workspace_root=workspace_root,
+        summary_state: str | None = None,
+    ) -> ChatSession:
+        if self._repository is not None:
+            session = self._repository.create_session(
+                project_name,
+                title=title,
+                session_id=session_id,
+                status=status,
+                mode=mode,
+                brain_name=brain_name,
+                summary_state=summary_state,
+            )
+            session.workspace_root = self._repository.workspace_root
+            session.project_name = project_name
+            session.title = title.strip() or session.title
+            session.status = status
+            session.mode = mode
+            session.brain_name = brain_name
+            session.summary_state = summary_state
+            self._repository.save_session(session)
+            return session
+        return ChatSession(
+            session_id=session_id or _new_id('cs'),
+            workspace_root=self._default_workspace_root(workspace_root),
+            project_name=project_name,
+            title=title.strip() or 'New chat',
+            status=status,
             brain_name=brain_name,
-            fallback_brain_name=fallback_brain_name,
             mode=mode,
-            operation_recorder=operation_recorder,
-        )
-        agent.expose_tool_output = expose_tool_output
-        if hasattr(agent.brain, 'tool_choice'):
-            setattr(agent.brain, 'tool_choice', 'auto')
-
-        last_user_index = self._find_last_user_message_index(messages)
-        if last_user_index is None:
-            raise ValueError('No user message found in chat history.')
-
-        for msg in self._iter_history_messages(messages, last_user_index, history_limit):
-            agent.conversation.append(msg)
-
-        user_message = str(messages[last_user_index].get('content', '')).strip()
-        enriched_message = user_message
-        if not no_scout:
-            scout_context = build_chat_scout_context(workspace_root, user_message)
-            if scout_context:
-                enriched_message = f'{user_message}\n\n--- Relevant project context (auto-scanned) ---\n{scout_context}'
-
-        agent.conversation.append({'role': 'user', 'content': enriched_message})
-        reply_text = agent._agentic_loop()
-        return ChatReplyResult(
-            reply_text=reply_text,
-            conversation=list(agent.conversation),
-            workspace_root=workspace_root,
-            brain_name=selected_brain,
-            mode=mode,
-            user_message=user_message,
-            enriched_message=enriched_message,
+            summary_state=summary_state,
         )
 
-    def generate_reply_for_session(
+    def load_session(self, session_id: str) -> ChatSession:
+        return self._require_repository().load_session(session_id)
+
+    def list_sessions(
         self,
-        session: ChatSession,
         *,
-        brain_name: str | None = None,
-        fallback_brain_name: str | None = None,
-        no_scout: bool = False,
-        expose_tool_output: bool = True,
-        history_limit: int = 20,
-    ) -> ChatReplyResult:
-        result = self.generate_reply(
-            workspace_root=session.workspace_root,
-            messages=session.messages,
-            brain_name=brain_name or session.brain_name,
-            fallback_brain_name=fallback_brain_name,
-            mode=session.mode,
-            no_scout=no_scout,
-            expose_tool_output=expose_tool_output,
-            history_limit=history_limit,
-            operation_recorder=self._build_operation_recorder(session),
-        )
-        session.messages = list(result.conversation)
-        session.conversation_cursor = len(session.messages)
-        session.updated_at = _now_iso()
-        session.brain_name = result.brain_name
-        session.mode = result.mode
-        return result
+        project_name: str | None = None,
+        status: str = 'all',
+    ) -> list[ChatSession]:
+        sessions = self._require_repository().list_sessions()
+        if project_name:
+            sessions = [session for session in sessions if session.project_name == project_name]
+        normalized_status = status.strip().lower()
+        if normalized_status == 'active':
+            sessions = [session for session in sessions if session.status != 'archived']
+        elif normalized_status == 'archived':
+            sessions = [session for session in sessions if session.status == 'archived']
+        elif normalized_status != 'all':
+            raise ValueError('status must be active, archived, or all')
+        return sessions
 
-    def _build_operation_recorder(self, session: ChatSession) -> Callable[[dict[str, Any]], None]:
+    def session_detail(self, session_id: str) -> dict[str, object]:
+        session = self._require_repository().load_session(session_id)
+        return {
+            'ok': True,
+            'session': session,
+            'messages': list(session.messages),
+            'operations': list(session.operation_history),
+            'latest_review': None,
+        }
+
+    def set_status(self, session: ChatSession, status: str) -> ChatSession:
+        session.status = status
+        session.updated_at = _now_iso()
+        return self.save_session(session)
+
+    def archive_session(self, session: ChatSession) -> ChatSession:
+        return self.set_status(session, 'archived')
+
+    def set_latest_review(self, session: ChatSession, review_id: str | None, *, status: str | None = None) -> ChatSession:
+        session.latest_review_id = review_id
+        if status is not None:
+            session.status = status
+        session.updated_at = _now_iso()
+        return self.save_session(session)
+
+    def set_latest_run(self, session: ChatSession, run_id: str | None, *, status: str | None = None) -> ChatSession:
+        session.latest_run_id = run_id
+        if status is not None:
+            session.status = status
+        session.updated_at = _now_iso()
+        return self.save_session(session)
+
+    def load_or_create_session(
+        self,
+        project_name: str,
+        *,
+        session_id: str | None = None,
+        title: str = 'Chat',
+        workspace_root: Path | None = None,
+        status: str = 'drafting',
+        mode: str = 'plan',
+        brain_name: str | None = None,
+        summary_state: str | None = None,
+    ) -> ChatSession:
+        if self._repository is None:
+            return self.create_session(
+                project_name,
+                title=title,
+                session_id=session_id,
+                workspace_root=workspace_root,
+                status=status,
+                mode=mode,
+                brain_name=brain_name,
+                summary_state=summary_state,
+            )
+        if session_id:
+            try:
+                session = self._repository.load_session(session_id)
+            except FileNotFoundError:
+                session = self.create_session(
+                    project_name,
+                    title=title,
+                    session_id=session_id,
+                    workspace_root=workspace_root,
+                    status=status,
+                    mode=mode,
+                    brain_name=brain_name,
+                    summary_state=summary_state,
+                )
+        else:
+            session = self.create_session(
+                project_name,
+                title=title,
+                workspace_root=workspace_root,
+                status=status,
+                mode=mode,
+                brain_name=brain_name,
+                summary_state=summary_state,
+            )
+        session.workspace_root = self._repository.workspace_root
+        self._repository.save_session(session)
+        return session
+
+    def build_operation_recorder(self, session: ChatSession) -> Callable[[dict[str, Any]], None]:
         def _record(record: dict[str, Any]) -> None:
             self.record_operation(
                 session,
@@ -197,8 +232,7 @@ class ChatSessionService:
         session.operation_history.append(record)
         session.operation_cursor = len(session.operation_history)
         session.updated_at = _now_iso()
-        if self._repository is not None:
-            self._repository.save_session(session)
+        self.save_session(session)
         return record
 
     def update_checkpoint(
@@ -216,8 +250,7 @@ class ChatSessionService:
         if summary_state is not None:
             session.summary_state = summary_state
         session.updated_at = _now_iso()
-        if self._repository is not None:
-            self._repository.save_session(session)
+        self.save_session(session)
         return session
 
     def rollback_last_operation(self, session: ChatSession) -> dict[str, object]:
@@ -250,15 +283,40 @@ class ChatSessionService:
             status='applied',
         )
 
-        if self._repository is not None:
-            self._repository.save_session(session)
+        self.save_session(session)
         return rollback_record
 
-    def _find_last_user_message_index(self, messages: list[dict[str, object]]) -> int | None:
-        for index in range(len(messages) - 1, -1, -1):
-            if str(messages[index].get('role', '')).strip() == 'user' and str(messages[index].get('content', '')).strip():
-                return index
-        return None
+    def append_message(
+        self,
+        session: ChatSession,
+        *,
+        role: str,
+        content: str,
+        kind: str = 'text',
+        refs: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        repository = self._require_repository()
+        message = repository.append_message(
+            session.session_id,
+            project_name=session.project_name,
+            role=role,
+            content=content,
+            kind=kind,
+            refs=refs,
+        )
+        updated = repository.load_session(session.session_id)
+        session.messages = list(updated.messages)
+        session.title = updated.title
+        session.status = updated.status
+        session.updated_at = updated.updated_at
+        session.project_name = updated.project_name
+        session.workspace_root = updated.workspace_root
+        session.brain_name = updated.brain_name
+        session.mode = updated.mode
+        session.conversation_cursor = updated.conversation_cursor
+        session.operation_cursor = updated.operation_cursor
+        session.summary_state = updated.summary_state
+        return message
 
     def _find_last_rollbackable_operation_index(self, operation_history: list[dict[str, object]]) -> int | None:
         for index in range(len(operation_history) - 1, -1, -1):
@@ -269,28 +327,6 @@ class ChatSessionService:
                 return index
         return None
 
-    def _iter_history_messages(
-        self,
-        messages: list[dict[str, object]],
-        last_user_index: int,
-        history_limit: int,
-    ) -> list[dict[str, object]]:
-        history: list[dict[str, object]] = []
-        for msg in messages[max(0, last_user_index - history_limit) : last_user_index]:
-            role = str(msg.get('role', '')).strip()
-            content = str(msg.get('content', '')).strip()
-            if not content or role not in {'user', 'assistant', 'tool'}:
-                continue
-            item: dict[str, object] = {'role': role, 'content': content}
-            tool_call_id = msg.get('tool_call_id')
-            if role == 'tool' and isinstance(tool_call_id, str) and tool_call_id.strip():
-                item['tool_call_id'] = tool_call_id.strip()
-            reasoning_content = msg.get('reasoning_content')
-            if isinstance(reasoning_content, str) and reasoning_content.strip():
-                item['reasoning_content'] = reasoning_content.strip()
-            history.append(item)
-        return history
-
 
 def _now_iso() -> str:
     from datetime import datetime
@@ -300,3 +336,4 @@ def _now_iso() -> str:
 
 def _new_id(prefix: str) -> str:
     return f'{prefix}_{secrets.token_hex(8)}'
+

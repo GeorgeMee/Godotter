@@ -3,10 +3,8 @@ from __future__ import annotations
 import html
 import json
 import os
-import sys
 import secrets
 import subprocess
-import threading
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -17,29 +15,22 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from godotter.config import get_settings
 from godotter.services.project.registry import load_project_registry
-from godotter.services.chat import ChatSessionService
+from godotter.services.chat import ReplyService, SessionService
 from godotter.services.chat.session_repository import ChatSessionRepository
 from godotter.services.chat.session_types import ChatSession
 from godotter.services.godot.builds import list_build_reports, run_export_build, run_export_doctor
 from godotter.services.project.scaffolding import scaffold_godot_project
+from godotter.services.workflow.plan_review import (
+    PlanReviewError,
+    create_plan_review,
+    generate_planpack,
+    parse_planner_json,
+    plan_tasks_from_json,
+    update_review_status,
+)
+from godotter.services.workflow import run_jobs
 from godotter.utils.envfile import EnvFile
-from godotter.tasks.planpack import (
-    PlanPack,
-    PlanState,
-    PlanTask,
-    new_plan_id,
-    plan_state_path,
-    write_planpack,
-    write_planstate,
-)
-from godotter.tasks.planning import (
-    ScoutPromptRef,
-    build_plan_prompt,
-    normalize_plan_dependencies,
-    validate_plan_tasks,
-)
-from godotter.tasks.scout import scout_workspace
-from godotter.operations import OperationRegistry, build_default_operations
+from godotter.tasks.planpack import PlanPack, PlanTask, plan_state_path
 
 
 app = FastAPI(title='Godotter Web Console', version='0.0.1')
@@ -48,8 +39,6 @@ ENV_FILENAME = '.env'
 PROJECTS_CONFIG = Path('config') / 'projects.toml'
 STATIC_DIR = Path(__file__).parent / 'static'
 ACTIVE_RUN_STATUSES = {'queued', 'running'}
-RUN_PROCESSES: dict[str, subprocess.Popen[str]] = {}
-RUN_PROCESS_LOCK = threading.Lock()
 
 if STATIC_DIR.exists():
     app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
@@ -575,22 +564,18 @@ def _save_review(workspace_root: Path, session_id: str, review: dict[str, object
 
 def _load_run(workspace_root: Path, session_id: str, run_id: str) -> dict[str, object]:
     run_id = _validate_id(run_id, prefix='rj')
-    path = _run_path(workspace_root, session_id, run_id)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail='run_not_found')
-    return _read_json(path)
+    try:
+        return run_jobs.load_run(workspace_root, session_id, run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='run_not_found') from exc
 
 
 def _save_run(workspace_root: Path, session_id: str, run: dict[str, object]) -> None:
-    _write_json(_run_path(workspace_root, session_id, str(run['run_id'])), run)
+    run_jobs.save_run(workspace_root, session_id, run)
 
 
 def _append_run_event(workspace_root: Path, session_id: str, run_id: str, event: dict[str, object]) -> None:
-    event_payload = {'created_at': _now_iso(), **event}
-    path = _run_events_path(workspace_root, session_id, run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a', encoding='utf-8', newline='\n') as handle:
-        handle.write(json.dumps(event_payload, ensure_ascii=False) + '\n')
+    run_jobs.append_run_event(workspace_root, session_id, run_id, event)
 
 
 def _append_plan_error(
@@ -626,124 +611,47 @@ def _append_plan_error(
 
 
 def _read_run_events(workspace_root: Path, session_id: str, run_id: str, *, after: int = 0) -> list[dict[str, object]]:
-    path = _run_events_path(workspace_root, session_id, run_id)
-    if not path.exists():
-        return []
-    events: list[dict[str, object]] = []
-    for index, line in enumerate(path.read_text(encoding='utf-8').splitlines()):
-        if index < after or not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except Exception:
-            continue
-        event['index'] = index
-        events.append(event)
-    return events
+    return run_jobs.read_run_events(workspace_root, session_id, run_id, after=after)
 
 
 def _run_process_key(session_id: str, run_id: str) -> str:
-    return f'{session_id}:{run_id}'
+    return run_jobs.run_process_key(session_id, run_id)
 
 
 def _register_run_process(session_id: str, run_id: str, process: subprocess.Popen[str]) -> None:
-    with RUN_PROCESS_LOCK:
-        RUN_PROCESSES[_run_process_key(session_id, run_id)] = process
+    run_jobs.register_run_process(session_id, run_id, process)
 
 
 def _unregister_run_process(session_id: str, run_id: str, process: subprocess.Popen[str]) -> None:
-    with RUN_PROCESS_LOCK:
-        key = _run_process_key(session_id, run_id)
-        if RUN_PROCESSES.get(key) is process:
-            RUN_PROCESSES.pop(key, None)
+    run_jobs.unregister_run_process(session_id, run_id, process)
 
 
 def _terminate_process_tree(pid: int) -> None:
-    if pid <= 0:
-        return
-    if sys.platform == 'win32':
-        subprocess.run(
-            ['taskkill', '/PID', str(pid), '/T', '/F'],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    else:
-        try:
-            os.killpg(pid, 15)
-        except Exception:
-            try:
-                os.kill(pid, 15)
-            except Exception:
-                pass
+    run_jobs.terminate_process_tree(pid)
 
 
 def _terminate_run_process(session_id: str, run_id: str) -> bool:
-    with RUN_PROCESS_LOCK:
-        process = RUN_PROCESSES.get(_run_process_key(session_id, run_id))
-    if process is None or process.poll() is not None:
-        return False
-    _terminate_process_tree(process.pid)
-    return True
+    return run_jobs.terminate_run_process(session_id, run_id)
 
 
 def _command_timeout_seconds() -> int:
-    raw = os.getenv('GODOTTER_WEB_RUN_COMMAND_TIMEOUT_SECONDS', '900').strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        return 900
-    return max(value, 0)
+    return run_jobs.command_timeout_seconds()
 
 
 def _list_runs(workspace_root: Path, session_id: str) -> list[dict[str, object]]:
-    runs_root = _runs_dir(workspace_root, session_id)
-    if not runs_root.exists():
-        return []
-    runs: list[dict[str, object]] = []
-    for path in sorted(runs_root.glob('rj_*.json'), key=lambda item: item.stat().st_mtime, reverse=True):
-        try:
-            runs.append(_enrich_run_artifacts(workspace_root, _read_json(path)))
-        except Exception:
-            continue
-    return runs
+    return run_jobs.list_runs(workspace_root, session_id)
 
 
 def _enrich_run_artifacts(workspace_root: Path, run: dict[str, object]) -> dict[str, object]:
-    enriched = dict(run)
-    commands = []
-    for command in enriched.get('commands', []) or []:
-        if isinstance(command, dict):
-            commands.append(_enrich_command_artifacts(workspace_root, command))
-    enriched['commands'] = commands
-    return enriched
+    return run_jobs.enrich_run_artifacts(workspace_root, run)
 
 
 def _enrich_command_artifacts(workspace_root: Path, command: dict[str, object]) -> dict[str, object]:
-    enriched = dict(command)
-    runstate_path = str(enriched.get('runstate_path') or '').strip()
-    verify_report_path = str(enriched.get('verify_report_path') or '').strip()
-    if runstate_path and 'runstate' not in enriched:
-        runstate = _read_artifact_json(workspace_root, runstate_path)
-        if runstate is not None:
-            enriched['runstate'] = runstate
-    if verify_report_path and 'verify_report' not in enriched:
-        verify_report = _read_artifact_json(workspace_root, verify_report_path)
-        if verify_report is not None:
-            enriched['verify_report'] = verify_report
-    return enriched
+    return run_jobs.enrich_command_artifacts(workspace_root, command)
 
 
 def _read_artifact_json(workspace_root: Path, value: str) -> dict[str, object] | None:
-    path = Path(value)
-    if not path.is_absolute():
-        path = workspace_root / path
-    try:
-        if not path.exists() or not path.is_file():
-            return None
-        return _read_json(path)
-    except Exception:
-        return None
+    return run_jobs.read_artifact_json(workspace_root, value)
 
 
 def _safe_project_file(workspace_root: Path, rel_path: str) -> Path:
@@ -762,12 +670,7 @@ def _safe_project_file(workspace_root: Path, rel_path: str) -> Path:
 
 
 def _extract_prefixed_path(text: str, prefix: str) -> str | None:
-    for line in reversed((text or '').splitlines()):
-        raw = line.strip()
-        if raw.startswith(prefix):
-            value = raw[len(prefix) :].strip()
-            return value or None
-    return None
+    return run_jobs.extract_prefixed_path(text, prefix)
 
 
 def _find_active_run_for_review(
@@ -777,34 +680,11 @@ def _find_active_run_for_review(
     *,
     item_ids: list[str] | None = None,
 ) -> dict[str, object] | None:
-    requested = set(item_ids or [])
-    for run in _list_runs(workspace_root, session_id):
-        if run.get('review_id') != review_id:
-            continue
-        if str(run.get('status', '')) not in ACTIVE_RUN_STATUSES:
-            continue
-        if requested and set(str(item_id) for item_id in run.get('task_ids', [])) != requested:
-            continue
-        return run
-    return None
+    return run_jobs.find_active_run_for_review(workspace_root, session_id, review_id, item_ids=item_ids)
 
 
 def _update_review_status(review: dict[str, object]) -> None:
-    items = review.get('items', [])
-    if not isinstance(items, list) or not items:
-        review['status'] = 'draft'
-        return
-    statuses = [str(item.get('status', '')) for item in items if isinstance(item, dict)]
-    if all(status == 'approved' for status in statuses):
-        review['status'] = 'approved'
-    elif any(status == 'approved' for status in statuses):
-        review['status'] = 'partially_approved'
-    elif any(status == 'needs_revision' for status in statuses):
-        review['status'] = 'needs_revision'
-    elif all(status == 'rejected' for status in statuses):
-        review['status'] = 'rejected'
-    else:
-        review['status'] = 'in_review'
+    update_review_status(review)
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -905,14 +785,7 @@ def _session_detail(workspace_root: Path, session_id: str) -> dict[str, object]:
 
 
 def _approved_review_item_ids(review: dict[str, object]) -> list[str]:
-    items = review.get('items', [])
-    if not isinstance(items, list):
-        return []
-    return [
-        str(item['item_id'])
-        for item in items
-        if isinstance(item, dict) and item.get('status') == 'approved' and item.get('item_id')
-    ]
+    return run_jobs.approved_review_item_ids(review)
 
 
 def _create_run_job(
@@ -923,286 +796,36 @@ def _create_run_job(
     *,
     item_ids: list[str] | None = None,
 ) -> dict[str, object]:
-    approved_ids = _approved_review_item_ids(review)
-    requested_ids = item_ids or approved_ids
-    task_ids = [item_id for item_id in requested_ids if item_id in approved_ids]
-    if not task_ids:
-        raise HTTPException(status_code=400, detail='no_approved_items_to_run')
-    planpack_path = str(review.get('planpack_path', '')).strip()
-    if not planpack_path:
-        raise HTTPException(status_code=400, detail='review_missing_planpack_path')
-
-    run_id = _new_id('rj')
-    run = {
-        'run_id': run_id,
-        'session_id': session_id,
-        'review_id': review['review_id'],
-        'project_name': project_name,
-        'workspace_root': workspace_root.as_posix(),
-        'status': 'queued',
-        'task_ids': task_ids,
-        'created_at': _now_iso(),
-        'started_at': None,
-        'finished_at': None,
-        'commands': [],
-        'artifacts': {'planpack_path': planpack_path},
-    }
-    _save_run(workspace_root, session_id, run)
-    session = _load_session(workspace_root, session_id)
-    session['latest_run_id'] = run_id
-    session['status'] = 'running'
-    session['updated_at'] = run['created_at']
-    _write_json(_session_meta_path(workspace_root, session_id), session)
-    _append_run_event(workspace_root, session_id, run_id, {'type': 'status', 'message': 'run_queued'})
-    return run
+    try:
+        return run_jobs.create_run_job(workspace_root, project_name, session_id, review, item_ids=item_ids)
+    except run_jobs.RunJobError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _start_run_job_background(workspace_root: Path, session_id: str, run_id: str) -> None:
-    worker = threading.Thread(
-        target=_run_job_worker,
-        args=(workspace_root, session_id, run_id),
-        name=f'godotter-web-run-{run_id}',
-        daemon=True,
-    )
-    worker.start()
+    run_jobs.start_run_job_background(workspace_root, session_id, run_id, repo_root=_repo_root())
 
 
 def _run_job_worker(workspace_root: Path, session_id: str, run_id: str) -> None:
-    try:
-        _execute_run_job_sync(workspace_root, session_id, run_id)
-    except Exception as exc:
-        try:
-            run = _load_run(workspace_root, session_id, run_id)
-            run['status'] = 'failed'
-            run['finished_at'] = _now_iso()
-            run.setdefault('commands', [])
-            run['error'] = str(exc)
-            _save_run(workspace_root, session_id, run)
-            _append_run_event(
-                workspace_root,
-                session_id,
-                run_id,
-                {'type': 'error', 'message': f'runner_exception: {exc}'},
-            )
-            session = _load_session(workspace_root, session_id)
-            session['status'] = 'blocked'
-            session['updated_at'] = str(run['finished_at'])
-            _write_json(_session_meta_path(workspace_root, session_id), session)
-        except Exception:
-            pass
+    run_jobs.run_job_worker(workspace_root, session_id, run_id, _repo_root())
 
 
 def _execute_run_job_sync(workspace_root: Path, session_id: str, run_id: str) -> dict[str, object]:
-    run = _load_run(workspace_root, session_id, run_id)
-    run['status'] = 'running'
-    run['started_at'] = _now_iso()
-    _save_run(workspace_root, session_id, run)
-    _append_run_event(workspace_root, session_id, run_id, {'type': 'status', 'message': 'run_started'})
-
-    planpack_path = str(run.get('artifacts', {}).get('planpack_path', ''))
-    commands: list[dict[str, object]] = []
-    exit_codes: list[int] = []
-    for task_id in run.get('task_ids', []):
-        command = [
-            'uv',
-            'run',
-            'godotter',
-            'plan',
-            'run',
-            '--plan',
-            planpack_path,
-            '--workspace',
-            workspace_root.as_posix(),
-            '--only',
-            str(task_id),
-        ]
-        _append_run_event(workspace_root, session_id, run_id, {'type': 'command', 'task_id': task_id, 'message': ' '.join(command)})
-        process = subprocess.Popen(
-            command,
-            cwd=_repo_root(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0,
-            start_new_session=sys.platform != 'win32',
-        )
-        _register_run_process(session_id, run_id, process)
-        timed_out = {'value': False}
-        timeout_seconds = _command_timeout_seconds()
-
-        def kill_on_timeout() -> None:
-            if process.poll() is None:
-                timed_out['value'] = True
-                _append_run_event(
-                    workspace_root,
-                    session_id,
-                    run_id,
-                    {
-                        'type': 'timeout',
-                        'task_id': task_id,
-                        'message': f'command_timeout_seconds={timeout_seconds}',
-                    },
-                )
-                _terminate_process_tree(process.pid)
-
-        timer = threading.Timer(timeout_seconds, kill_on_timeout) if timeout_seconds > 0 else None
-        if timer is not None:
-            timer.daemon = True
-            timer.start()
-        stdout_lines: list[str] = []
-        try:
-            if process.stdout is not None:
-                for line in process.stdout:
-                    stdout_lines.append(line)
-                    _append_run_event(
-                        workspace_root,
-                        session_id,
-                        run_id,
-                        {'type': 'stdout', 'task_id': task_id, 'message': line.rstrip()},
-                    )
-            return_code = process.wait()
-        finally:
-            if timer is not None:
-                timer.cancel()
-            _unregister_run_process(session_id, run_id, process)
-        command_result = {
-            'task_id': task_id,
-            'command': command,
-            'exit_code': return_code,
-            'stdout': ''.join(stdout_lines),
-            'stderr': '',
-            'timed_out': timed_out['value'],
-        }
-        stdout_text = str(command_result['stdout'])
-        runstate_path = _extract_prefixed_path(stdout_text, 'runstate=')
-        verify_report_path = _extract_prefixed_path(stdout_text, 'task_run_verify_report=') or _extract_prefixed_path(stdout_text, 'report=')
-        if runstate_path:
-            command_result['runstate_path'] = runstate_path
-            runstate = _read_artifact_json(workspace_root, runstate_path)
-            if runstate is not None:
-                command_result['runstate'] = runstate
-        if verify_report_path:
-            command_result['verify_report_path'] = verify_report_path
-            verify_report = _read_artifact_json(workspace_root, verify_report_path)
-            if verify_report is not None:
-                command_result['verify_report'] = verify_report
-        commands.append(command_result)
-        exit_codes.append(return_code)
-        _append_run_event(
-            workspace_root,
-            session_id,
-            run_id,
-            {
-                'type': 'command_result',
-                'task_id': task_id,
-                'message': f'exit_code={return_code}',
-                'payload': command_result,
-            },
-        )
-        stored_run = _load_run(workspace_root, session_id, run_id)
-        if stored_run.get('status') == 'interrupted':
-            stored_run['commands'] = commands
-            stored_run['finished_at'] = stored_run.get('finished_at') or _now_iso()
-            _save_run(workspace_root, session_id, stored_run)
-            return stored_run
-        stored_run['commands'] = commands
-        _save_run(workspace_root, session_id, stored_run)
-        if timed_out['value']:
-            break
-        if return_code != 0:
-            break
-
-    run['commands'] = commands
-    run['finished_at'] = _now_iso()
-    run['status'] = 'passed' if exit_codes and all(code == 0 for code in exit_codes) else 'failed'
-    _save_run(workspace_root, session_id, run)
-    _append_run_event(workspace_root, session_id, run_id, {'type': 'status', 'message': str(run['status'])})
-
-    session = _load_session(workspace_root, session_id)
-    session['status'] = 'completed' if run['status'] == 'passed' else 'blocked'
-    session['updated_at'] = str(run['finished_at'])
-    _write_json(_session_meta_path(workspace_root, session_id), session)
-    return run
+    return run_jobs.execute_run_job_sync(workspace_root, session_id, run_id, repo_root=_repo_root())
 
 
 def _parse_planner_json(raw: str, workspace_root: Path) -> dict[str, object]:
-    raw_stripped = raw.strip()
     try:
-        parsed = json.loads(raw_stripped)
-    except Exception:
-        end = raw_stripped.rfind('}')
-        if end == -1:
-            debug_path = workspace_root / '.godotter' / 'plans' / 'last_planner_output.txt'
-            debug_path.parent.mkdir(parents=True, exist_ok=True)
-            debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
-            raise HTTPException(
-                status_code=502,
-                detail=f'planner_did_not_return_json saved={debug_path.as_posix()}',
-            )
-        # Find "tasks" keyword first, then locate the root { before it.
-        tasks_pos = raw_stripped.rfind('"tasks"', 0, end)
-        if tasks_pos != -1:
-            start = raw_stripped.rfind('{', 0, tasks_pos)
-        else:
-            start = raw_stripped.rfind('{', 0, end)
-        if start == -1 or end <= start:
-            debug_path = workspace_root / '.godotter' / 'plans' / 'last_planner_output.txt'
-            debug_path.parent.mkdir(parents=True, exist_ok=True)
-            debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
-            raise HTTPException(
-                status_code=502,
-                detail=f'planner_did_not_return_json saved={debug_path.as_posix()}',
-            )
-        try:
-            parsed = json.loads(raw_stripped[start : end + 1])
-        except Exception as exc:
-            debug_path = workspace_root / '.godotter' / 'plans' / 'last_planner_output.txt'
-            debug_path.parent.mkdir(parents=True, exist_ok=True)
-            debug_path.write_text(raw_stripped, encoding='utf-8', newline='\n')
-            raise HTTPException(
-                status_code=502,
-                detail=f'planner_json_parse_failed: {exc} saved={debug_path.as_posix()}',
-            ) from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=502, detail='planner_json_root_must_be_object')
-    return parsed
+        return parse_planner_json(raw, workspace_root)
+    except PlanReviewError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _plan_tasks_from_json(parsed: dict[str, object]) -> list[PlanTask]:
-    raw_tasks = parsed.get('tasks', [])
-    if not isinstance(raw_tasks, list) or not raw_tasks:
-        raise HTTPException(status_code=502, detail='planner_json_missing_tasks')
-
-    tasks: list[PlanTask] = []
-    used_ids: set[str] = set()
-    for index, item in enumerate(raw_tasks, start=1):
-        if not isinstance(item, dict):
-            continue
-        raw_id = str(item.get('id', '')).strip()
-        task_id = raw_id or f't{index}'
-        if task_id in used_ids:
-            task_id = f'{task_id}_{index}'
-        used_ids.add(task_id)
-        tasks.append(
-            PlanTask(
-                id=task_id,
-                title=str(item.get('title', '')).strip() or 'task',
-                goal=str(item.get('goal', '')).strip() or '',
-                depends_on=[str(x) for x in item.get('depends_on', []) if x],
-                scope=[str(x) for x in item.get('scope', []) if x],
-                acceptance=[str(x) for x in item.get('acceptance', []) if x],
-                verification=[str(x) for x in item.get('verification', []) if x],
-            )
-        )
-
     try:
-        normalize_plan_dependencies(tasks)
-        validate_plan_tasks(tasks)
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return tasks
+        return plan_tasks_from_json(parsed)
+    except PlanReviewError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _generate_planpack(
@@ -1211,62 +834,17 @@ def _generate_planpack(
     *,
     brain_name: str | None = None,
 ) -> tuple[PlanPack, Path]:
-    base_settings = get_settings()
-    settings = base_settings.model_copy(update={'workspace_root': workspace_root})
-    memory = Memory(settings.resolved_memory_path)
-    registry = build_default_operations()
-    selected_brain = brain_name or settings.resolved_plan_brain
-    summary = build_project_summary(workspace_root)
-    summary_text = render_project_summary(summary) if summary else None
-    agent = Agent(
-        brain=create_brain(settings, selected_brain, model_override=getattr(settings, 'plan_model', None)),
-        settings=settings,
-        registry=registry,
-        memory=memory,
-        mode='plan',
-        brain_name=selected_brain,
-        project_summary=summary_text,
-    )
-    # Plan generation is a single-shot JSON prompt with no chat history.
-    # Tools are disabled to force pure JSON output.
-    agent.brain.tools = []
-    if hasattr(agent.brain, 'tool_choice'):
-        setattr(agent.brain, 'tool_choice', 'none')
-
-    scout = scout_workspace(workspace_root, goal, max_files=40)
-    prompt, constraints = build_plan_prompt(
-        goal,
-        [ScoutPromptRef(path=ref.path, reason=ref.reason) for ref in scout.relevant_files],
-    )
-    raw = agent.handle_input(prompt)
-    parsed = _parse_planner_json(raw, workspace_root)
-    tasks = _plan_tasks_from_json(parsed)
-    pack = PlanPack(
-        plan_id=new_plan_id(),
-        created_at=_now_iso(),
-        workspace_root=workspace_root.as_posix(),
-        goal=goal,
-        name=str(parsed.get('name', '')).strip() or goal[:80],
-        global_constraints=constraints,
-        tasks=tasks,
-    )
-    out_path = write_planpack(workspace_root, pack)
-    state = PlanState(
-        plan_id=pack.plan_id,
-        updated_at=_now_iso(),
-        task_status={task.id: 'pending' for task in tasks},
-    )
-    write_planstate(plan_state_path(out_path), state)
-    latest_path = workspace_root / '.godotter' / 'plans' / 'latest.json'
-    if latest_path.exists():
-        write_planstate(plan_state_path(latest_path), state)
-    return pack, out_path
+    try:
+        return generate_planpack(workspace_root, goal, brain_name=brain_name)
+    except PlanReviewError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _generate_chat_reply(session: ChatSession, *, brain_name: str | None = None) -> str:
     base_settings = get_settings()
-    service = ChatSessionService(base_settings)
-    result = service.generate_reply_for_session(
+    session_service = SessionService(base_settings)
+    reply_service = ReplyService(base_settings, session_service)
+    result = reply_service.generate_reply_for_session(
         session,
         brain_name=brain_name,
         fallback_brain_name=base_settings.resolved_chat_brain,
@@ -1281,39 +859,7 @@ def _create_plan_review(
     planpack: PlanPack,
     planpack_path: Path,
 ) -> dict[str, object]:
-    review_id = _new_id('pr')
-    review = {
-        'review_id': review_id,
-        'session_id': session_id,
-        'created_at': _now_iso(),
-        'status': 'in_review',
-        'planpack_path': planpack_path.as_posix(),
-        'plan_id': planpack.plan_id,
-        'goal': planpack.goal,
-        'items': [
-            {
-                'item_id': task.id,
-                'title': task.title,
-                'goal': task.goal,
-                'scope': task.scope,
-                'acceptance': task.acceptance,
-                'verification': task.verification,
-                'depends_on': task.depends_on,
-                'status': 'needs_review',
-                'comment': '',
-                'approved_at': None,
-                'run_job_id': None,
-            }
-            for task in planpack.tasks
-        ],
-    }
-    _write_json(_review_path(workspace_root, session_id, review_id), review)
-    session = _load_session(workspace_root, session_id)
-    session['latest_review_id'] = review_id
-    session['status'] = 'reviewing'
-    session['updated_at'] = review['created_at']
-    _write_json(_session_meta_path(workspace_root, session_id), session)
-    return review
+    return create_plan_review(workspace_root, session_id, planpack, planpack_path)
 
 
 def _require_token_if_configured(request: Request) -> None:

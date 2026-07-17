@@ -69,11 +69,25 @@ def resolve_runtime_target(settings, project: str | None = None) -> RuntimeTarge
         except Exception:
             pass
 
-    selected = direct or _optional_string(settings.default_project_name) or registry.default_project
-    if selected:
+    if direct:
+        entry = registry.projects.get(direct)
+        if entry is None:
+            raise ProjectRegistryError(f'Unknown project: {direct}')
+        workspace_root = entry.workspace_root.resolve()
+        godot_path = entry.godot_path or settings.godot_path
+        return RuntimeTarget(
+            project_name=entry.name,
+            workspace_root=workspace_root,
+            godot_path=godot_path,
+            main_scene=entry.main_scene,
+        )
+
+    for selected in (_optional_string(settings.default_project_name), registry.default_project):
+        if not selected:
+            continue
         entry = registry.projects.get(selected)
         if entry is None:
-            raise ProjectRegistryError(f'Unknown project: {selected}')
+            continue
         workspace_root = entry.workspace_root.resolve()
         godot_path = entry.godot_path or settings.godot_path
         return RuntimeTarget(

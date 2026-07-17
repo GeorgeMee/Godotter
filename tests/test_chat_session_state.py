@@ -1,10 +1,10 @@
 from godotter.services.chat.session_repository import ChatSessionRepository
-from godotter.services.chat.session_service import ChatSessionService
+from godotter.services.chat.session_service import SessionService
 
 
 def test_session_records_operations_and_checkpoint(tmp_path):
     repo = ChatSessionRepository(tmp_path)
-    service = ChatSessionService(type('S', (), {'workspace_root': tmp_path, 'resolved_chat_brain': 'stub'})(), repository=repo)
+    service = SessionService(type('S', (), {'workspace_root': tmp_path, 'resolved_chat_brain': 'stub'})(), repository=repo)
     session = repo.create_session('demo')
 
     record = service.record_operation(
@@ -31,7 +31,7 @@ def test_session_records_operations_and_checkpoint(tmp_path):
 
 def test_session_can_rollback_last_operation(tmp_path):
     repo = ChatSessionRepository(tmp_path)
-    service = ChatSessionService(type('S', (), {'workspace_root': tmp_path, 'resolved_chat_brain': 'stub'})(), repository=repo)
+    service = SessionService(type('S', (), {'workspace_root': tmp_path, 'resolved_chat_brain': 'stub'})(), repository=repo)
     session = repo.create_session('demo')
 
     target = tmp_path / 'game' / 'sample.txt'

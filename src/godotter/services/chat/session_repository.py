@@ -29,7 +29,18 @@ class ChatSessionRepository:
     def sessions_dir(self) -> Path:
         return self.workspace_root / '.godotter' / 'sessions'
 
-    def create_session(self, project_name: str, *, title: str = '', session_id: str | None = None, now_iso: str | None = None) -> ChatSession:
+    def create_session(
+        self,
+        project_name: str,
+        *,
+        title: str = '',
+        session_id: str | None = None,
+        now_iso: str | None = None,
+        status: str = 'drafting',
+        mode: str = 'plan',
+        brain_name: str | None = None,
+        summary_state: str | None = None,
+    ) -> ChatSession:
         resolved_session_id = session_id or _new_id('cs')
         timestamp = now_iso or _now_iso()
         session = ChatSession(
@@ -37,8 +48,12 @@ class ChatSessionRepository:
             workspace_root=self.workspace_root,
             project_name=project_name,
             title=title.strip() or 'New chat',
+            status=status,
             created_at=timestamp,
             updated_at=timestamp,
+            brain_name=brain_name,
+            mode=mode,
+            summary_state=summary_state,
         )
         self._write_json(self.session_meta_path(resolved_session_id), session.meta_dict())
         self.session_data_dir(resolved_session_id).mkdir(parents=True, exist_ok=True)
@@ -123,21 +138,19 @@ class ChatSessionRepository:
             'content': content,
             'refs': refs or [],
         }
-        path = self.session_messages_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a', encoding='utf-8', newline='\n') as handle:
-            handle.write(json.dumps(message, ensure_ascii=False) + '\n')
-
+        session.messages.append(message)
         session.updated_at = timestamp
         if session.title == 'New chat' and role == 'user':
             session.title = content[:48]
         session.project_name = project_name
         session.workspace_root = self.workspace_root
         self._write_json(self.session_meta_path(session_id), session.meta_dict())
+        self._write_jsonl(self.session_messages_path(session_id), session.messages)
         return message
 
     def save_session(self, session: ChatSession) -> None:
         self._write_json(self.session_meta_path(session.session_id), session.meta_dict())
+        self._write_jsonl(self.session_messages_path(session.session_id), session.messages)
         self._write_jsonl(self.session_operations_path(session.session_id), session.operation_history)
 
     def append_operation(
@@ -192,6 +205,7 @@ class ChatSessionRepository:
             'ok': True,
             'session': session.meta_dict(),
             'messages': self.read_messages(session_id),
+            'operations': self.read_operations(session_id),
             'latest_review': None,
         }
 

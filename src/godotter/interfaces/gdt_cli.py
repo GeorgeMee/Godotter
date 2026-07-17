@@ -6,6 +6,8 @@ from godotter.interfaces.commands.chat import chat_command
 from godotter.interfaces.commands.info import info_command
 from godotter.interfaces.commands.llm import model_app, provider_app
 from godotter.interfaces.commands.project import human_project_app
+from godotter.interfaces.commands.session import session_app
+from godotter.interfaces.commands.rollback import rollback_command
 
 
 app = typer.Typer(
@@ -16,6 +18,8 @@ app = typer.Typer(
 
 app.command('info', help='Show project information and configuration.')(info_command)
 app.command('chat', help='Start an interactive AI chat session or send one message.')(chat_command)
+app.command('rollback', help='Rollback the latest change in a saved chat session.')(rollback_command)
+app.add_typer(session_app, name='session')
 app.add_typer(provider_app, name='provider')
 app.add_typer(model_app, name='model')
 app.add_typer(human_project_app, name='project')
